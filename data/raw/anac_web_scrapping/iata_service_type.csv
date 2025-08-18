@@ -1,0 +1,25 @@
+​Service Type Code,​Application,​Type of Operation,​Service Type Description​​
+​J,Schedule​,​Passenger,​Normal Service
+​S,​Schedule,​Passenger​,Shuttle Mode​
+​U,​Schedule,​​Passenger,Service operated by Surface Cehicle​
+F​,​Schedule,​Passenger​,Loose Loaded cargo and/or preloade devices​
+​V,Schedule​,​Passenger​,Service operated by Surface Vehicle​
+​M,Schedule​,​Passenger​,​Mail only
+​Q,Schedule​,​​Passenger / Cargo,Passenger/Cargo in Cabin(mixed configuration aircraft)​
+​G,Additional Flights​,​​Passenger,Normal Service​
+​B,Additional Flights​,​​Passenger,Shuttle Mode​
+​A,​Additional Flights,​​Cargo/Mail​,Carga and / or Mail​
+​R,Additional Flights​,​​Passenger/Cargo,Passenger/Cargo in Cabin (mixed configuration aircraft)​
+​C,Charlet​,​​Passenger,Passenger Only​
+​​O,Charlet​,​​Special Handling,Charter requiring special handling (e.g Migrants/Immigrant Flights)​
+​​H,​Charlet,Cargo/Mail​,Carga and / or Mail​​
+​L,Charlet​,Passenger/Cargo/Mail​,Passenger and Cargo and/or Mail​
+​P,​Others,Not specific​,Non-revenue (Positioning/Ferry/Delivery/Demo)
+​T,​Others,Not specific​,Technical Test​
+K​,Others​,Not specific​,Training (School/Crew check)​
+​D,​Others,Not specific​,General Aviation​
+​E,Others​,Not specific​,Special (FAA/Government)​
+​W,​Others,Not specific​,​Military
+​X,​Others,​Not specific,Technical Stop (for Chapter 6 applications only)​
+​I,Others​,Not specific​,State/Diplomatic/Air Ambulance (Chapter 6 only)​
+​N,Others​,​Not specific​,Business Aviation/Air Taxi
