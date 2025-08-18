@@ -7,7 +7,7 @@ class DataProcessor:
     def __init__(self, spark_session: SparkSession):
         self.spark = spark_session
     
-    def set_schema(self):
+    def set_mov_schema(self):
         return StructType([
             StructField("ANO", StringType(), True),
             StructField("MES", StringType(), True),
@@ -37,11 +37,11 @@ class DataProcessor:
             StructField("QT_CARGA", DoubleType(), True),
         ]) 
 
-    def read_file(self, schema, path, sep): 
+    def read_anac_mov_file(self, schema, path, sep): 
         df = self.spark.read.option("header", "true").option("nullValue" ,"null").schema(schema).csv(path, sep=sep)
         return df
     
-    def select_columns(self, df):
+    def select_columns_mov_file(self, df):
         new_df = df.select(col("ANO").alias("ano"),
                            col("MES").alias("mes"),
                            col("NR_AEROPORTO_REFERENCIA").alias("aeroporto_ref"),
@@ -67,16 +67,38 @@ class DataProcessor:
                            )
         return new_df
 
+    def set_iata_schema(self):
+        return StructType([
+            StructField("​Service Type Code", StringType(), True),
+            StructField("​Application", StringType(), True),
+            StructField("​Type of Operation", StringType(), True),
+            StructField("​Service Type Description​​", StringType(), True)
+        ])
+    
+    def read_service_file(self, schema, path, sep):
+        df = self.spark.read.option("header", "true").option("nullValue", "null").schema(schema).csv(path, sep=sep)
+        return df
+    
+    def select_columns_iata_file(self, df):
+        new_df = df.select(col("​Service Type Code").alias("cod_tipo_servico"),
+                           col("​Type of Operation").alias("tipo_servico_operacao"),
+                           col("​Service Type Description​​").alias("tipo_servico_desc")
+                           )
+        return new_df
+
 if __name__ == "__main__": 
     spark_session = SparkSession.builder \
         .appName("ANAC_Data_Processing") \
         .getOrCreate()
     
     processor = DataProcessor(spark_session) 
-    schema = processor.set_schema()
-    df = processor.read_file(schema=schema,path='./data/Movimentacoes_Aeroportuarias_201901.csv', sep=';')
+    # schema = processor.set_mov_schema()
+    # df = processor.read_anac_mov_file(schema=schema,path='./data/Movimentacoes_Aeroportuarias_201901.csv', sep=';')
+    # df_filtered = processor.select_columns_mov_file(df)
 
-    df_filtered = processor.select_columns(df)
+    schema = processor.set_iata_schema()
+    df = processor.read_service_file(schema=schema, path='./data/raw/anac_web_scrapping/iata_service_type.csv', sep=',')
+    df = processor.select_columns_iata_file(df)
 
-    df_filtered.show()
+    df.show()
     spark_session.stop()
