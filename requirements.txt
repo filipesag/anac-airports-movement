@@ -1,4 +1,11 @@
+# Spark com suporte a SQL e S3
+pyspark[sql,cloud]==3.5.6
+
+# Pacotes para manipulação de dados
+pandas==2.3.1
+requests==2.32.5
 beautifulsoup4==4.13.3
-webdriver-manager==4.0.2
-pyspark==4.0.0
-apache-airflow[amazon,snowflake,celery]==3.0.4
+
+# Airflow e providers
+apache-airflow-providers-amazon
+apache-airflow-providers-snowflake
