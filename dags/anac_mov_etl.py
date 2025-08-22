@@ -1,5 +1,6 @@
 from datetime import datetime
 from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 from airflow.decorators import dag, task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from src.anac_web_scraping import scrape_iata_service_types
@@ -28,6 +29,8 @@ def anac_etl():
 
     @task(task_id="anac_scraping", retries=3)
     def scraping_and_save_to_s3():
+
+        logging.info("Starting Anac Scraping to collect Services Types Data")
         service_type = scrape_iata_service_types()
 
         s3_hook = S3Hook(aws_conn_id='aws_default')
@@ -46,6 +49,9 @@ def anac_etl():
     @task(task_id="transform_anac_mov_files")
     def transform_anac_mov_files():
 
+        
+        logging.info("Starting Anac Files Processing")
+
         spark = (
             SparkSession.builder
             .appName("ANAC_Data_Processing")
@@ -55,92 +61,127 @@ def anac_etl():
             .config("spark.local.dir", "/tmp/spark")
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
+            .config("spark.driver.memory", "4g")
+            .config("spark.executor.memory", "4g")
             .getOrCreate()
         )
+
+        spark.conf.set("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY")
+        
         processor = DataProcessor(spark)
-
-        anac_mov_columns = {
-            "ANO": "ano",
-            "MES": "mes",
-            "NR_AEROPORTO_REFERENCIA": "aeroporto_ref",
-            "NR_MOVIMENTO_TIPO": "tipo_movimento",
-            "NR_AERONAVE_MARCAS": "matricula_aeronave",
-            "NR_AERONAVE_TIPO": "aeronave_modelo_icao",
-            "NR_AERONAVE_OPERADOR": "aeronave_operador",
-            "NR_VOO_OUTRO_AEROPORTO": "aeroporto_outro",
-            "NR_VOO_NUMERO": "numero_voo",
-            "NR_SERVICE_TYPE": "tipo_servico",
-            "NR_NATUREZA": "natureza_operacao",
-            "DT_PREVISTO": "data_prevista_movimento",
-            "HH_PREVISTO": "hora_prevista_movimento",
-            "DT_CALCO": "data_calco",
-            "HH_CALCO": "hora_calco",
-            "DT_TOQUE": "data_manobra",
-            "HH_TOQUE": "hora_manobra",
-            "QT_PAX_LOCAL": "qtd_pax_local",
-            "QT_PAX_CONEXAO_DOMESTICO": "qtd_pax_conexao_domestico",
-            "QT_PAX_CONEXAO_INTERNACIONAL": "qtd_pax_conexao_internacional",
-            "QT_CORREIO": "qtd_correio",
-            "QT_CARGA": "qtd_carga"
-        } 
-
-        
-        anac_mov_fields = [
-            ("ANO", StringType(), True),
-            ("MES", StringType(), True),
-            ("NR_AEROPORTO_REFERENCIA", StringType(), True),
-            ("NR_MOVIMENTO_TIPO", StringType(), True),
-            ("NR_AERONAVE_MARCAS", StringType(), True),
-            ("NR_AERONAVE_TIPO", StringType(), True),
-            ("NR_AERONAVE_OPERADOR", StringType(), True),
-            ("NR_VOO_OUTRO_AEROPORTO", StringType(), True),
-            ("NR_VOO_NUMERO", StringType(), True),
-            ("NR_SERVICE_TYPE", StringType(), True),
-            ("NR_NATUREZA", StringType(), True),
-            ("DT_PREVISTO", TimestampType(), True),
-            ("HH_PREVISTO", TimestampType(), True),
-            ("DT_CALCO", TimestampType(), True),
-            ("HH_CALCO", TimestampType(), True),
-            ("DT_TOQUE", TimestampType(), True),
-            ("HH_TOQUE", TimestampType(), True),
-            ("NR_CABECEIRA", StringType(), True),
-            ("NR_BOX", StringType(), True),
-            ("NR_PONTE_CONECTOR_REMOTO", StringType(), True),
-            ("NR_TERMINAL", StringType(), True),
-            ("QT_PAX_LOCAL", IntegerType(), True),
-            ("QT_PAX_CONEXAO_DOMESTICO", IntegerType(), True),
-            ("QT_PAX_CONEXAO_INTERNACIONAL", IntegerType(), True),
-            ("QT_CORREIO", DoubleType(), True),
-            ("QT_CARGA", DoubleType(), True)
-        ]
-        schema = processor.create_schema(anac_mov_fields)
-        
         s3_hook = S3Hook(aws_conn_id='aws_default')
         bucket = 'anac-mov'
-        years = ['2019','2020','2021','2022','2023','2024']
-        months = ['jan','fev','mar','abr','maio','jun','julho','ago','set','out','nov','dez']
-        index = 0
+        
+        anac_mov_columns_default = {
+            "ANO": "ano", "MES": "mes", "NR_AEROPORTO_REFERENCIA": "aeroporto_ref", "NR_MOVIMENTO_TIPO": "tipo_movimento",
+            "NR_AERONAVE_MARCAS": "matricula_aeronave", "NR_AERONAVE_TIPO": "aeronave_modelo_icao",
+            "NR_AERONAVE_OPERADOR": "aeronave_operador", "NR_VOO_OUTRO_AEROPORTO": "aeroporto_outro",
+            "NR_VOO_NUMERO": "numero_voo", "NR_SERVICE_TYPE": "tipo_servico", "NR_NATUREZA": "natureza_operacao",
+            "DT_PREVISTO": "data_prevista_movimento", "HH_PREVISTO": "hora_prevista_movimento",
+            "DT_CALCO": "data_calco", "HH_CALCO": "hora_calco", "DT_TOQUE": "data_manobra",
+            "HH_TOQUE": "hora_manobra", "QT_PAX_LOCAL": "qtd_pax_local", "QT_PAX_CONEXAO_DOMESTICO": "qtd_pax_conexao_domestico",
+            "QT_PAX_CONEXAO_INTERNACIONAL": "qtd_pax_conexao_internacional", "QT_CORREIO": "qtd_correio",
+            "QT_CARGA": "qtd_carga"
+        } 
+        
+        anac_mov_fields_default = [
+            ("ANO", StringType(), True), ("MES", StringType(), True), ("NR_AEROPORTO_REFERENCIA", StringType(), True),
+            ("NR_MOVIMENTO_TIPO", StringType(), True), ("NR_AERONAVE_MARCAS", StringType(), True),
+            ("NR_AERONAVE_TIPO", StringType(), True), ("NR_AERONAVE_OPERADOR", StringType(), True),
+            ("NR_VOO_OUTRO_AEROPORTO", StringType(), True), ("NR_VOO_NUMERO", StringType(), True),
+            ("NR_SERVICE_TYPE", StringType(), True), ("NR_NATUREZA", StringType(), True),
+            ("DT_PREVISTO", TimestampType(), True), ("HH_PREVISTO", TimestampType(), True),
+            ("DT_CALCO", TimestampType(), True), ("HH_CALCO", TimestampType(), True),
+            ("DT_TOQUE", TimestampType(), True), ("HH_TOQUE", TimestampType(), True),
+            ("NR_CABECEIRA", StringType(), True), ("NR_BOX", StringType(), True),
+            ("NR_PONTE_CONECTOR_REMOTO", StringType(), True), ("NR_TERMINAL", StringType(), True),
+            ("QT_PAX_LOCAL", IntegerType(), True), ("QT_PAX_CONEXAO_DOMESTICO", IntegerType(), True),
+            ("QT_PAX_CONEXAO_INTERNACIONAL", IntegerType(), True), ("QT_CORREIO", DoubleType(), True),
+            ("QT_CARGA", DoubleType(), True)
+        ]
 
-        for year in years:
-  
-            prefix = f'bronze/anac_movimentacoes/{year}/'  
-            anac_file_list = s3_hook.list_keys(bucket_name='anac-mov', prefix=prefix)
+        anac_mov_fields_2022 = [
+            ("NR_AERONAVE_MARCAS", StringType(), True), ("NR_AERONAVE_TIPO", StringType(), True),
+            ("NR_AERONAVE_OPERADOR", StringType(), True), ("NR_VOO_OUTRO_AEROPORTO", StringType(), True),
+            ("NR_VOO_NUMERO", StringType(), True), ("DT_PREVISTO", TimestampType(), True),
+            ("HH_PREVISTO", TimestampType(), True), ("DT_CALCO", TimestampType(), True),
+            ("HH_CALCO", TimestampType(), True), ("DT_TOQUE", TimestampType(), True),
+            ("HH_TOQUE", TimestampType(), True), ("NR_CABECEIRA", StringType(), True),
+            ("NR_TERMINAL", StringType(), True), ("QT_PAX_LOCAL", IntegerType(), True),
+            ("QT_PAX_CONEXAO_DOMESTICO", IntegerType(), True), ("QT_CORREIO", DoubleType(), True),
+            ("QT_CARGA", DoubleType(), True), ("ANO", StringType(), True),
+            ("MES", StringType(), True), ("NR_AEROPORTO_REFERENCIA", StringType(), True),
+            ("NR_MOVIMENTO_TIPO", StringType(), True), ("NR_SERVICE_TYPE", StringType(), True),
+            ("NR_NATUREZA", StringType(), True), ("NR_BOX", StringType(), True),
+            ("NR_PONTE_CONECTOR_REMOTO", StringType(), True),
+            ("QT_PAX_CONEXAO_INTERNACIONAL", IntegerType(), True)
+        ]
+        
+        problematic_file_path = f"s3a://{bucket}/bronze/anac_movimentacoes/2022/Movimentacoes_Aeroportuarias_202207.csv"
+        df_problematic = spark.read.option("header", "true").option("nullValue", "null").schema(processor.create_schema(anac_mov_fields_2022)).csv(problematic_file_path, sep=';')
+        
+        anac_mov_columns_problematic = {
+            "NR_AERONAVE_MARCAS": "matricula_aeronave", "NR_AERONAVE_TIPO": "aeronave_modelo_icao",
+            "NR_AERONAVE_OPERADOR": "aeronave_operador", "NR_VOO_OUTRO_AEROPORTO": "aeroporto_outro",
+            "NR_VOO_NUMERO": "numero_voo", "NR_SERVICE_TYPE": "tipo_servico", "NR_NATUREZA": "natureza_operacao",
+            "DT_PREVISTO": "data_prevista_movimento", "HH_PREVISTO": "hora_prevista_movimento",
+            "DT_CALCO": "data_calco", "HH_CALCO": "hora_calco", "DT_TOQUE": "data_manobra",
+            "HH_TOQUE": "hora_manobra", "QT_PAX_LOCAL": "qtd_pax_local", "QT_PAX_CONEXAO_DOMESTICO": "qtd_pax_conexao_domestico",
+            "QT_PAX_CONEXAO_INTERNACIONAL": "qtd_pax_conexao_internacional", "QT_CORREIO": "qtd_correio",
+            "QT_CARGA": "qtd_carga","ANO": "ano", "MES": "mes", "NR_AEROPORTO_REFERENCIA": "aeroporto_ref", "NR_MOVIMENTO_TIPO": "tipo_movimento"
+        }
+        df_problematic = processor.select_and_rename_columns(df_problematic, anac_mov_columns_problematic)
+        
+        anac_file_list = []
+        for year in ['2019', '2020', '2021', '2022', '2023', '2024']:
+            prefix = f'bronze/anac_movimentacoes/{year}/'
+            files_in_year = s3_hook.list_keys(bucket_name='anac-mov', prefix=prefix)
+            anac_file_list.extend([f"s3a://{bucket}/{key}" for key in files_in_year if key and key.endswith('.csv')])
+            
+        normal_files = [f for f in anac_file_list if f != problematic_file_path]
+        df_normal = spark.read.option("header", "true").option("nullValue", "null").schema(processor.create_schema(anac_mov_fields_default)).csv(normal_files, sep=';')
+        
+        df_normal = processor.select_and_rename_columns(df_normal, anac_mov_columns_default)
 
-            csv_files = [key for key in anac_file_list if key and key.endswith('.csv')]
-            for file in csv_files:
-                s3_path = f"s3a://{bucket}/{file}"
-                
-                df = processor.read_file(path=s3_path,schema=schema,sep=';')
-                df = processor.select_and_rename_columns(df,anac_mov_columns)
-                output_path = f"s3a://{bucket}/silver/anac_movimentacoes/{year}/anac_movimentacoes_{months[index]}"
+        df_final = df_normal.unionByName(df_problematic)
 
-                df.write.mode("overwrite").parquet(output_path)
-                logging.info(f"File anac_movimentacoes_{months[index]}.parquet save in silver layer")
-                index += 1
+        df_final = processor.replace_null_values(df_final, ['ano'], 'Ano não informado')
+        df_final = processor.replace_null_values(df_final, ['aeroporto_ref','aeroporto_outro'], 'Aeroporto não informado')
+        df_final = processor.replace_null_values(df_final, ['matricula_aeronave'], 'Matrícula não informada')
+        df_final = processor.replace_null_values(df_final, ['aeronave_modelo_icao'], 'Modelo não informado')
+        df_final = processor.replace_null_values(df_final, ['aeronave_operador'], 'Operador não informado')
+        df_final = processor.replace_null_values(df_final, ['numero_voo'], 'Número de voo não informado')
+        df_final = processor.replace_null_values(df_final, ['tipo_servico'], 'Serviço não informado')
+        df_final = processor.replace_null_values(df_final, ['natureza_operacao'], 'Tipo de operação não informada')
+        df_final = processor.replace_null_values(df_final, ['data_prevista_movimento','data_calco','data_manobra'], 'Data não informada')
+        df_final = processor.replace_null_values(df_final, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')
+        
+        df_final = df_final.withColumn("mes", F.when(F.col("mes") == 1, "Janeiro").
+                                       when(F.col("mes") == 2, "Fevereiro").
+                                       when(F.col("mes") == 3, "Março").
+                                       when(F.col("mes") == 4, "Abril").
+                                       when(F.col("mes") == 5, "Maio").
+                                       when(F.col("mes") == 6, "Junho").
+                                       when(F.col("mes") == 7, "Julho").
+                                       when(F.col("mes") == 8, "Agosto").
+                                       when(F.col("mes") == 9, "Setembro").
+                                       when(F.col("mes") == 10, "Outubro").
+                                       when(F.col("mes") == 11, "Novembro").
+                                       when(F.col("mes") == 12, "Dezembro").
+                                       otherwise("Mês não informado"))
+
+        output_path = f"s3a://{bucket}/silver/anac_movimentacoes/"
+        df_final.write.mode("overwrite").partitionBy("ano", "mes").parquet(output_path)
+        
+        logging.info(f"Files saved in {output_path} partitioned by year/month")
+        
         spark.stop()
+
 
     @task(task_id="transform_iata_service_file")
     def transform_iata_service_file():
+
+        logging.info("Starting Iata Service File Processing")
 
         spark = (
             SparkSession.builder
