@@ -5,6 +5,7 @@ from airflow.decorators import dag, task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from src.anac_web_scraping import scrape_iata_service_types
 from src.data_processing import DataProcessor
+from src.data_enriching import DataEnriching
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
 from airflow.models import Variable
 import logging
@@ -63,11 +64,11 @@ def anac_etl():
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
             .config("spark.driver.memory", "4g")
             .config("spark.executor.memory", "4g")
+            .config("spark.sql.parquet.int96RebaseModeInWrite", "CORRECTED")
             .getOrCreate()
         )
 
-        spark.conf.set("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY")
-        
+      
         processor = DataProcessor(spark)
         s3_hook = S3Hook(aws_conn_id='aws_default')
         bucket = 'anac-mov'
@@ -170,17 +171,31 @@ def anac_etl():
                                        when(F.col("mes") == 12, "Dezembro").
                                        otherwise("Mês não informado"))
 
-        output_path = f"s3a://{bucket}/silver/anac_movimentacoes/"
-        df_final.write.mode("overwrite").partitionBy("ano", "mes").parquet(output_path)
+        df_final = df_final.withColumn("natureza_operacao", F.when(F.col("natureza_operacao")=="D", "Doméstico").
+                                       when(F.col("natureza_operacao")=="I", "Internacional").
+                                       otherwise("Mês não informado"))
         
-        logging.info(f"Files saved in {output_path} partitioned by year/month")
+        df_aero_ref = df_final.select("aeroporto_ref")
+        df_aero_outro = df_final.select("aeroporto_outro")
+        df_aero = df_aero_ref.union(df_aero_outro).distinct()
+
+        output_path = f"s3a://{bucket}/silver"
+
+        df_aero.write \
+            .option("delimiter", ",") \
+            .mode("overwrite") \
+            .csv(f"{output_path}/anac_aeroportos/")
+
+        
+        df_final.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
+        
+        logging.info(f"Files saved in {output_path}/anac_movimentacoes/ partitioned by year/month")
         
         spark.stop()
 
 
     @task(task_id="transform_iata_service_file")
     def transform_iata_service_file():
-
         logging.info("Starting Iata Service File Processing")
 
         spark = (
@@ -194,39 +209,99 @@ def anac_etl():
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
             .getOrCreate()
         )
-        
-        processor = DataProcessor(spark)
-
-        iata_columns = {"​Service Type Code":"cod_tipo_servico",
-                        "​Type of Operation":"tipo_servico_operacao",
-                        "​Service Type Description​​":"tipo_servico_desc"}
-
-        iata_fields = [
-            ("​Service Type Code", StringType(), True),
-            ("​Application", StringType(), True),
-            ("​Type of Operation", StringType(), True),
-            ("​Service Type Description​​", StringType(), True)
-        ]
-        schema_service = processor.create_schema(iata_fields)
 
         s3_hook = S3Hook(aws_conn_id='aws_default')
         bucket = 'anac-mov'
-        prefix = f'bronze/anac_scraping/'  
-        
+        prefix = 'bronze/anac_scraping/' 
+
         anac_scrap_file = s3_hook.list_keys(bucket_name='anac-mov', prefix=prefix)
         service_file = [file for file in anac_scrap_file if not file.endswith("/")]
-           
+            
         s3_path = f"s3a://{bucket}/{service_file[0]}"
-  
-        df_service_type = processor.read_file(path=s3_path,schema=schema_service,sep=',')
-        df_service_type = processor.select_and_rename_columns(df_service_type,iata_columns)
+
+        df_service_type = spark.read.option("header", "true").csv(s3_path, sep=',')
+
+        for col_name in df_service_type.columns:
+            clean_name = col_name.replace('\u200b', '')
+            df_service_type = df_service_type.withColumnRenamed(col_name, clean_name)
+
+        iata_columns = {
+            "Service Type Code": "cod_tipo_servico",
+            "Application": "aplicacao_servico",
+            "Type of Operation": "tipo_servico_operacao",
+            "Service Type Description": "tipo_servico_desc"
+        }
+
+        df_service_type = df_service_type.select(
+            *[F.col(c).alias(iata_columns.get(c, c)) for c in iata_columns.keys()]
+        )
+
+        df_service_type = df_service_type.withColumn("cod_tipo_servico", F.regexp_replace(F.col("cod_tipo_servico"), u'\u200b', ''))
+        df_service_type = df_service_type.withColumn("cod_tipo_servico", F.trim(F.col("cod_tipo_servico")))
+
         output_path_iata = f"s3a://{bucket}/silver/anac_scraping/"
-        df_service_type.write.mode("overwrite").parquet(output_path_iata)
-        logging.info(f"File iata_service_type.parquet save in silver layer")
+        df_service_type.write \
+            .mode("overwrite") \
+            .parquet(output_path_iata)
+
+        logging.info(f"File iata_service_type.csv saved in silver layer")
 
         spark.stop()
 
+    @task(task_id="enrich_data")
+    def enrich_anac_mov_files():
+        logging.info("Starting Anac Files Enriching")
 
-    scraping_and_save_to_s3() >> [transform_anac_mov_files(),transform_iata_service_file()]
+        spark = (
+            SparkSession.builder
+            .appName("ANAC_Data_Processing")
+            .config("spark.hadoop.fs.s3a.access.key", aws_access_key)
+            .config("spark.hadoop.fs.s3a.secret.key", aws_secret_key)
+            .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com")
+            .config("spark.local.dir", "/tmp/spark")
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+            .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
+            .config("spark.driver.memory", "4g")
+            .config("spark.executor.memory", "4g")
+            .getOrCreate()
+        )
+
+        spark.conf.set("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY")
+        
+        enrich = DataEnriching(spark)
+        # s3_hook = S3Hook(aws_conn_id='aws_default')
+        bucket = 'anac-mov'
+
+        df_anac = spark.read.parquet(f"s3a://{bucket}/silver/anac_movimentacoes/")
+        df_iata = spark.read.parquet(f"s3a://{bucket}/silver/anac_scraping/")
+
+        df_anac = df_anac.withColumn("tipo_servico", F.regexp_replace(F.col("tipo_servico"), u'\u200b', ''))
+        df_anac = df_anac.withColumn("tipo_servico", F.trim(F.col("tipo_servico")))
+
+        df_iata = df_iata.withColumn("cod_tipo_servico", F.regexp_replace(F.col("cod_tipo_servico"), u'\u200b', ''))
+        df_iata = df_iata.withColumn("cod_tipo_servico", F.trim(F.col("cod_tipo_servico")))
+
+        df_enriched = df_anac.join(
+            df_iata,
+            on=(F.col("tipo_servico") == F.col("cod_tipo_servico")),
+            how="left"
+        )
+
+        #enrich data with flags
+        df_enriched = enrich.add_nocturne_flag(df_enriched)
+        df_enriched = enrich.add_day_column(df_enriched)
+        df_enriched = enrich.add_flag_covid(df_enriched)
+        df_enriched = enrich.add_flag_delay(df_enriched)
+
+        output_path = f"s3a://{bucket}/silver"
+        df_enriched.write \
+            .option("delimiter", ",") \
+            .mode("overwrite") \
+            .csv(f"{output_path}/anac_aeroportos/")
+        print(df_enriched.show(5))
+
+        
+
+    scraping_and_save_to_s3() >> [transform_anac_mov_files(), transform_iata_service_file()] >> enrich_anac_mov_files()
 
 anac_etl()
