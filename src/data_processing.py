@@ -114,6 +114,7 @@ if __name__ == "__main__":
     df = processor.replace_null_values(df, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')
 
     df = processor.replace_column_values(df, {"1":"Janeiro"}, ['mes'])
-    # df = df.where("qtd_carga = -1").collect()
+   
+
     filtered_df = df.where(col("qtd_carga") == -1)
     print(filtered_df.show())

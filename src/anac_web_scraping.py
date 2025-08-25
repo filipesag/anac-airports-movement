@@ -12,10 +12,6 @@ logging.basicConfig(
 
 def scrape_iata_service_types():
     url = "https://www.gov.br/anac/pt-br/acesso-a-informacao/dados-abertos/areas-de-atuacao/operador-aeroportuario/dados-de-movimentacao-aeroportuaria/metadados-operador-aeroportuario-dados-de-movimentacao-aeroportuaria"
-    output_filename = "iata_service_type.csv"
-    output_dir = "./data/raw/anac_web_scraping"
-
-    os.makedirs(output_dir, exist_ok=True)
 
     try:
         response = requests.get(url)

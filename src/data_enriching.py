@@ -19,10 +19,6 @@ class DataEnriching:
         df = df.withColumn("atraso", F.when(delay_condition, True).otherwise(False))
         return df
     
-    def add_nocturne_flag(self, df):
-        df = df.withColumn("noturno", when(col("hora_manobra").between("18:00:00", "06:00:00"), True).otherwise(False))
-        return df
-    
     def add_day_column(self, df):
         days = {
             "Monday": "Segunda-feira",
@@ -48,17 +44,15 @@ class DataEnriching:
         )
         return df
     
-    def create_departure_df(self, df):
-        df = df.select("aeroporto_ref", "aeroporto_outro") \
-            .where(F.col("tipo_movimento") == "D") \
-            .withColumnRenamed("aeroporto_ref", "aeroporto_partida") \
-            .withColumnRenamed("aeroporto_outro", "aeroporto_chegada")
-        return df
-    
-    def create_arrival_df(self, df):
-        df = df.select("aeroporto_ref", "aeroporto_outro") \
-            .where(F.col("tipo_movimento") == "P") \
-            .withColumnRenamed("aeroporto_ref", "aeroporto_chegada") \
-            .withColumnRenamed("aeroporto_outro", "aeroporto_partida")
+    def set_airports(self, df):
+        df = df.withColumn(
+            "aeroporto_partida",
+            F.when(F.col("tipo_movimento") == "D", F.col("aeroporto_ref"))
+            .when(F.col("tipo_movimento") == "P", F.col("aeroporto_outro"))
+        ).withColumn(
+            "aeroporto_chegada",
+            F.when(F.col("tipo_movimento") == "P", F.col("aeroporto_ref"))
+            .when(F.col("tipo_movimento") == "D", F.col("aeroporto_outro"))
+        )
         return df
     

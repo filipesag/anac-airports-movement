@@ -175,21 +175,13 @@ def anac_etl():
                                        when(F.col("natureza_operacao")=="I", "Internacional").
                                        otherwise("Mês não informado"))
         
-        df_aero_ref = df_final.select("aeroporto_ref")
-        df_aero_outro = df_final.select("aeroporto_outro")
-        df_aero = df_aero_ref.union(df_aero_outro).distinct()
+        df_final = df_final.dropDuplicates(['data_prevista_movimento','data_calco','data_manobra','hora_prevista_movimento','hora_calco','hora_manobra'])
 
         output_path = f"s3a://{bucket}/silver"
-
-        df_aero.write \
-            .option("delimiter", ",") \
-            .mode("overwrite") \
-            .csv(f"{output_path}/anac_aeroportos/")
-
-        
+    
         df_final.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
         
-        logging.info(f"Files saved in {output_path}/anac_movimentacoes/ partitioned by year/month")
+        logging.info(f"File processed and saved in silver layer - Partitioned by year/month")
         
         spark.stop()
 
@@ -239,14 +231,70 @@ def anac_etl():
         df_service_type = df_service_type.withColumn("cod_tipo_servico", F.regexp_replace(F.col("cod_tipo_servico"), u'\u200b', ''))
         df_service_type = df_service_type.withColumn("cod_tipo_servico", F.trim(F.col("cod_tipo_servico")))
 
+        df_service_type = df_service_type.dropDuplicates()
+
         output_path_iata = f"s3a://{bucket}/silver/anac_scraping/"
         df_service_type.write \
             .mode("overwrite") \
             .parquet(output_path_iata)
 
-        logging.info(f"File iata_service_type.csv saved in silver layer")
+        logging.info(f"File processed and saved in silver layer")
 
         spark.stop()
+   
+    @task(task_id="transform_airports_file")
+    def transform_airports_file():
+        logging.info("Starting Icao Airports Files Processing")
+
+        spark = (
+            SparkSession.builder
+            .appName("ANAC_Data_Processing")
+            .config("spark.hadoop.fs.s3a.access.key", aws_access_key)
+            .config("spark.hadoop.fs.s3a.secret.key", aws_secret_key)
+            .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com")
+            .config("spark.local.dir", "/tmp/spark")
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+            .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
+            .config("spark.driver.memory", "4g")
+            .config("spark.executor.memory", "4g")
+            .getOrCreate()
+        )
+
+        bucket = 'anac-mov'
+
+        processor = DataProcessor(spark)
+
+        airpots_columns = {"ident":"aeroporto_icao",
+                        "type":"tipo_aeroporto",
+                        "name":"nome_aeroporto",
+                        "continent":"continente",
+                        "iso_country":"pais_iso",
+                        "municipality":"cidade"
+                        }
+
+        airports_fields_default = [
+            ("ident", StringType(), True), ("type", StringType(), True), ("name", StringType(), True),
+            ("elevation_ft", StringType(), True), ("continent", StringType(), True),
+            ("iso_country", StringType(), True), ("iso_region", StringType(), True),
+            ("municipality", StringType(), True), ("icao_code", StringType(), True),
+            ("iata_code", StringType(), True), ("gps_code", StringType(), True),
+            ("local_code", TimestampType(), True), ("coordinates", TimestampType(), True)
+        ]
+
+        airports_schema = processor.create_schema(airports_fields_default)
+        input_path = f"s3a://{bucket}/bronze/icao_aeroportos/airport-codes.csv"
+
+        airports_df = processor.read_file(airports_schema,input_path,sep=',')
+        airports_df = processor.select_and_rename_columns(airports_df,airpots_columns)
+
+        airports_df = airports_df.dropDuplicates()
+
+        output_path = f"s3a://{bucket}/silver/icao_aeroportos/"
+        airports_df.write \
+            .mode("overwrite") \
+            .parquet(output_path)
+        
+        logging.info(f"File processed and saved in silver layer")
 
     @task(task_id="enrich_data")
     def enrich_anac_mov_files():
@@ -269,17 +317,24 @@ def anac_etl():
         spark.conf.set("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY")
         
         enrich = DataEnriching(spark)
-        # s3_hook = S3Hook(aws_conn_id='aws_default')
         bucket = 'anac-mov'
 
         df_anac = spark.read.parquet(f"s3a://{bucket}/silver/anac_movimentacoes/")
         df_iata = spark.read.parquet(f"s3a://{bucket}/silver/anac_scraping/")
+        df_airports = spark.read.parquet(f"s3a://{bucket}/silver/icao_aeroportos/")
 
         df_anac = df_anac.withColumn("tipo_servico", F.regexp_replace(F.col("tipo_servico"), u'\u200b', ''))
+        df_anac = df_anac.withColumn("aeroporto_ref", F.regexp_replace(F.col("aeroporto_ref"), u'\u200b', ''))
+        df_anac = df_anac.withColumn("aeroporto_outro", F.regexp_replace(F.col("aeroporto_outro"), u'\u200b', ''))
         df_anac = df_anac.withColumn("tipo_servico", F.trim(F.col("tipo_servico")))
+        df_anac = df_anac.withColumn("aeroporto_ref", F.trim(F.col("aeroporto_ref")))
+        df_anac = df_anac.withColumn("aeroporto_outro", F.trim(F.col("aeroporto_outro"))) 
 
         df_iata = df_iata.withColumn("cod_tipo_servico", F.regexp_replace(F.col("cod_tipo_servico"), u'\u200b', ''))
         df_iata = df_iata.withColumn("cod_tipo_servico", F.trim(F.col("cod_tipo_servico")))
+
+        df_airports = df_airports.withColumn("aeroporto_icao", F.regexp_replace(F.col("aeroporto_icao"), u'\u200b', ''))
+        df_airports = df_airports.withColumn("aeroporto_icao", F.trim(F.col("aeroporto_icao")))
 
         df_enriched = df_anac.join(
             df_iata,
@@ -288,20 +343,39 @@ def anac_etl():
         )
 
         #enrich data with flags
-        df_enriched = enrich.add_nocturne_flag(df_enriched)
         df_enriched = enrich.add_day_column(df_enriched)
         df_enriched = enrich.add_flag_covid(df_enriched)
         df_enriched = enrich.add_flag_delay(df_enriched)
 
-        output_path = f"s3a://{bucket}/silver"
-        df_enriched.write \
-            .option("delimiter", ",") \
-            .mode("overwrite") \
-            .csv(f"{output_path}/anac_aeroportos/")
-        print(df_enriched.show(5))
+        df_enriched = enrich.set_airports(df_enriched)
 
+        df_airports_partida = df_airports.selectExpr(
+            "aeroporto_icao as aeroporto_partida_icao",
+            "tipo_aeroporto as tipo_aero_partida",
+            "nome_aeroporto as nome_aeroporto_partida",
+            "continente as continente_partida",
+            "pais_iso as pais_partida",
+            "cidade as cidade_partida"
+        )
+
+        df_airports_chegada = df_airports.selectExpr(
+            "aeroporto_icao as aeroporto_chegada_icao",
+            "tipo_aeroporto as tipo_aero_chegada",
+            "nome_aeroporto as nome_aeroporto_chegada",
+            "continente as continente_chegada",
+            "pais_iso as pais_chegada",
+            "cidade as cidade_chegada"
+        )
+
+        df_enriched = df_enriched \
+            .join(df_airports_partida, df_enriched["aeroporto_partida"] == F.col("aeroporto_partida_icao"), "left") \
+            .join(df_airports_chegada, df_enriched["aeroporto_chegada"] == F.col("aeroporto_chegada_icao"), "left")
+        
+        output_path = f"s3a://{bucket}/gold"
+        df_enriched.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
+        print(df_enriched.count())
         
 
-    scraping_and_save_to_s3() >> [transform_anac_mov_files(), transform_iata_service_file()] >> enrich_anac_mov_files()
+    scraping_and_save_to_s3() >> [transform_anac_mov_files(), transform_iata_service_file(), transform_airports_file()] >> enrich_anac_mov_files()
 
 anac_etl()
