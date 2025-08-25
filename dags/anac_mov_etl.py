@@ -367,13 +367,23 @@ def anac_etl():
             "cidade as cidade_chegada"
         )
 
+        
         df_enriched = df_enriched \
             .join(df_airports_partida, df_enriched["aeroporto_partida"] == F.col("aeroporto_partida_icao"), "left") \
             .join(df_airports_chegada, df_enriched["aeroporto_chegada"] == F.col("aeroporto_chegada_icao"), "left")
         
+        selected_columns = ['numero_voo','qtd_pax_local','qtd_pax_conexao_domestico','qtd_pax_conexao_internacional', 
+                            'qtd_correio','qtd_carga','pandemia_decreto','atraso','matricula_aeronave','aeronave_modelo_icao','aeronave_operador', 
+                            'natureza_operacao','data_prevista_movimento', 'hora_prevista_movimento', 'data_calco', 
+                            'hora_calco', 'data_manobra','hora_manobra','ano', 'mes', 'dia_semana' ,'cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc', 
+                            'aeroporto_partida', 'tipo_aero_partida', 'nome_aeroporto_partida', 'continente_partida', 'pais_partida', 'cidade_partida', 'aeroporto_chegada', 
+                            'tipo_aero_chegada', 'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada']
+
+        df_enriched_reordered = df_enriched.select(*selected_columns)
+
         output_path = f"s3a://{bucket}/gold"
-        df_enriched.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
-        print(df_enriched.count())
+        df_enriched_reordered.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
+        print(df_enriched.columns)
         
 
     scraping_and_save_to_s3() >> [transform_anac_mov_files(), transform_iata_service_file(), transform_airports_file()] >> enrich_anac_mov_files()
