@@ -1,6 +1,8 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
 from pyspark.sql.functions import col, when, to_timestamp, concat_ws, lit, to_date, date_format
+from pyspark.sql import functions as F
+from pyspark.sql import DataFrame
 
 class DataProcessor:
     
@@ -26,6 +28,15 @@ class DataProcessor:
 
     def replace_column_values(self, df, values:dict, columns:list):
         return df.replace(values, subset=columns)
+
+    def clean_string_columns(self, df: DataFrame) -> DataFrame:
+        string_cols = [c.name for c in df.schema.fields if c.dataType.simpleString() == "string"]
+        
+        for col_name in string_cols:
+            df = df.withColumn(col_name, F.regexp_replace(F.col(col_name), u'\u200b', ''))
+            df = df.withColumn(col_name, F.trim(F.col(col_name)))
+        
+        return df
     
 
 if __name__ == "__main__":

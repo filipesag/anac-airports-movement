@@ -6,7 +6,9 @@ from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from src.anac_web_scraping import scrape_iata_service_types
 from src.data_processing import DataProcessor
 from src.data_enriching import DataEnriching
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
+from pyspark.sql.window import Window
+from pyspark.sql.functions import broadcast
+from pyspark.sql.types import StringType, IntegerType, DoubleType, TimestampType
 from airflow.models import Variable
 import logging
 
@@ -144,6 +146,10 @@ def anac_etl():
         
         df_normal = processor.select_and_rename_columns(df_normal, anac_mov_columns_default)
 
+        #evitando shuffle
+        df_normal = df_normal.repartition(100)
+        df_problematic = df_problematic.repartition(100)
+
         df_final = df_normal.unionByName(df_problematic)
 
         df_final = processor.replace_null_values(df_final, ['ano'], 'Ano não informado')
@@ -175,11 +181,21 @@ def anac_etl():
                                        when(F.col("natureza_operacao")=="I", "Internacional").
                                        otherwise("Mês não informado"))
         
-        df_final = df_final.dropDuplicates(['data_prevista_movimento','data_calco','data_manobra','hora_prevista_movimento','hora_calco','hora_manobra'])
+        
+        w = Window.partitionBy(['data_prevista_movimento','data_calco','data_manobra','hora_prevista_movimento','hora_calco','hora_manobra']).orderBy("data_calco") 
+        df_final = df_final.withColumn("rn", F.row_number().over(w)).filter("rn = 1").drop("rn")
+
+        df_final = df_final.withColumn("data_prevista_movimento", F.to_date("data_prevista_movimento")) \
+        .withColumn("data_calco", F.to_date("data_calco")) \
+        .withColumn("data_manobra", F.to_date("data_manobra")) \
+        .withColumn("hora_prevista_movimento", F.date_format("hora_prevista_movimento", "HH:mm")) \
+        .withColumn("hora_calco", F.date_format("hora_calco", "HH:mm")) \
+        .withColumn("hora_manobra", F.date_format("hora_manobra", "HH:mm"))     
 
         output_path = f"s3a://{bucket}/silver"
     
         df_final.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
+        print(df_final.head(5))
         
         logging.info(f"File processed and saved in silver layer - Partitioned by year/month")
         
@@ -212,10 +228,6 @@ def anac_etl():
         s3_path = f"s3a://{bucket}/{service_file[0]}"
 
         df_service_type = spark.read.option("header", "true").csv(s3_path, sep=',')
-
-        for col_name in df_service_type.columns:
-            clean_name = col_name.replace('\u200b', '')
-            df_service_type = df_service_type.withColumnRenamed(col_name, clean_name)
 
         iata_columns = {
             "Service Type Code": "cod_tipo_servico",
@@ -317,27 +329,20 @@ def anac_etl():
         spark.conf.set("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY")
         
         enrich = DataEnriching(spark)
+        # processor = DataProcessor(spark)
         bucket = 'anac-mov'
 
         df_anac = spark.read.parquet(f"s3a://{bucket}/silver/anac_movimentacoes/")
         df_iata = spark.read.parquet(f"s3a://{bucket}/silver/anac_scraping/")
         df_airports = spark.read.parquet(f"s3a://{bucket}/silver/icao_aeroportos/")
+        
+        df_anac = DataProcessor.clean_string_columns(df_anac)
+        df_iata = DataProcessor.clean_string_columns(df_iata)
+        df_airports = DataProcessor.clean_string_columns(df_airports)
 
-        df_anac = df_anac.withColumn("tipo_servico", F.regexp_replace(F.col("tipo_servico"), u'\u200b', ''))
-        df_anac = df_anac.withColumn("aeroporto_ref", F.regexp_replace(F.col("aeroporto_ref"), u'\u200b', ''))
-        df_anac = df_anac.withColumn("aeroporto_outro", F.regexp_replace(F.col("aeroporto_outro"), u'\u200b', ''))
-        df_anac = df_anac.withColumn("tipo_servico", F.trim(F.col("tipo_servico")))
-        df_anac = df_anac.withColumn("aeroporto_ref", F.trim(F.col("aeroporto_ref")))
-        df_anac = df_anac.withColumn("aeroporto_outro", F.trim(F.col("aeroporto_outro"))) 
-
-        df_iata = df_iata.withColumn("cod_tipo_servico", F.regexp_replace(F.col("cod_tipo_servico"), u'\u200b', ''))
-        df_iata = df_iata.withColumn("cod_tipo_servico", F.trim(F.col("cod_tipo_servico")))
-
-        df_airports = df_airports.withColumn("aeroporto_icao", F.regexp_replace(F.col("aeroporto_icao"), u'\u200b', ''))
-        df_airports = df_airports.withColumn("aeroporto_icao", F.trim(F.col("aeroporto_icao")))
 
         df_enriched = df_anac.join(
-            df_iata,
+            broadcast(df_iata),
             on=(F.col("tipo_servico") == F.col("cod_tipo_servico")),
             how="left"
         )
@@ -369,8 +374,8 @@ def anac_etl():
 
         
         df_enriched = df_enriched \
-            .join(df_airports_partida, df_enriched["aeroporto_partida"] == F.col("aeroporto_partida_icao"), "left") \
-            .join(df_airports_chegada, df_enriched["aeroporto_chegada"] == F.col("aeroporto_chegada_icao"), "left")
+            .join(broadcast(df_airports_partida), df_enriched["aeroporto_partida"] == F.col("aeroporto_partida_icao"), "left") \
+            .join(broadcast(df_airports_chegada), df_enriched["aeroporto_chegada"] == F.col("aeroporto_chegada_icao"), "left")
         
         selected_columns = ['numero_voo','qtd_pax_local','qtd_pax_conexao_domestico','qtd_pax_conexao_internacional', 
                             'qtd_correio','qtd_carga','pandemia_decreto','atraso','matricula_aeronave','aeronave_modelo_icao','aeronave_operador', 
@@ -381,10 +386,39 @@ def anac_etl():
 
         df_enriched_reordered = df_enriched.select(*selected_columns)
 
+        df_enriched_reordered = df_enriched_reordered.withColumn(
+            "tipo_aero_partida",
+            F.when(F.col("tipo_aero_partida") == "small_airport", "Pequeno")
+            .when(F.col("tipo_aero_partida") == "medium_airport", "Médio")
+            .when(F.col("tipo_aero_partida") == "large_airport", "Grande")
+            .otherwise("Não Informado")
+        )
+
+        df_enriched_reordered = df_enriched_reordered.withColumn(
+            "tipo_aero_chegada",
+            F.when(F.col("tipo_aero_chegada") == "small_airport", "Pequeno")
+            .when(F.col("tipo_aero_chegada") == "medium_airport", "Médio")
+            .when(F.col("tipo_aero_chegada") == "large_airport", "Grande")
+            .otherwise("Não Informado")
+        )
+
+        df_enriched_reordered = df_enriched_reordered.fillna(
+            "Não Informado",
+            subset=['nome_aeroporto_partida', 'continente_partida',
+                'pais_partida', 'cidade_partida', 'aeroporto_chegada', 'tipo_aero_chegada',
+                'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada'
+            ]
+        )
+
         output_path = f"s3a://{bucket}/gold"
         df_enriched_reordered.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
-        print(df_enriched.columns)
-        
+
+        print(df_enriched_reordered.head(1))
+        # df_enriched_reordered.select([
+        #     F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c)
+        #     for c in df_enriched_reordered.columns
+        # ]).show()
+
 
     scraping_and_save_to_s3() >> [transform_anac_mov_files(), transform_iata_service_file(), transform_airports_file()] >> enrich_anac_mov_files()
 
