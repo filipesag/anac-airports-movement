@@ -9,6 +9,8 @@ from src.data_enriching import DataEnriching
 from pyspark.sql.window import Window
 from pyspark.sql.functions import broadcast
 from pyspark.sql.types import StringType, IntegerType, DoubleType, TimestampType
+from pyspark.sql.functions import lit
+from pyspark.sql.types import DateType
 from airflow.models import Variable
 import logging
 
@@ -329,16 +331,16 @@ def anac_etl():
         spark.conf.set("spark.sql.legacy.parquet.int96RebaseModeInWrite", "LEGACY")
         
         enrich = DataEnriching(spark)
-        # processor = DataProcessor(spark)
+        processor = DataProcessor(spark)
         bucket = 'anac-mov'
 
         df_anac = spark.read.parquet(f"s3a://{bucket}/silver/anac_movimentacoes/")
         df_iata = spark.read.parquet(f"s3a://{bucket}/silver/anac_scraping/")
         df_airports = spark.read.parquet(f"s3a://{bucket}/silver/icao_aeroportos/")
         
-        df_anac = DataProcessor.clean_string_columns(df_anac)
-        df_iata = DataProcessor.clean_string_columns(df_iata)
-        df_airports = DataProcessor.clean_string_columns(df_airports)
+        df_anac = processor.clean_string_columns(df_anac)
+        df_iata = processor.clean_string_columns(df_iata)
+        df_airports = processor.clean_string_columns(df_airports)
 
 
         df_enriched = df_anac.join(
@@ -402,13 +404,22 @@ def anac_etl():
             .otherwise("Não Informado")
         )
 
-        df_enriched_reordered = df_enriched_reordered.fillna(
-            "Não Informado",
-            subset=['nome_aeroporto_partida', 'continente_partida',
-                'pais_partida', 'cidade_partida', 'aeroporto_chegada', 'tipo_aero_chegada',
-                'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada'
-            ]
-        )
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['ano'], 'Ano não informado')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['aeroporto_chegada','aeroporto_partida'], 'Aeroporto não informado')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['matricula_aeronave'], 'Matrícula não informada')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['aeronave_modelo_icao'], 'Modelo não informado')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['aeronave_operador'], 'Operador não informado')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['numero_voo'], 'Número de voo não informado')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc'], 'Serviço não informado')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['natureza_operacao'], 'Tipo de operação não informada')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['data_prevista_movimento','data_calco','data_manobra'], "1900-01-01")
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['numero_voo','qtd_pax_local','qtd_pax_conexao_domestico','qtd_pax_conexao_internacional', 
+                            'qtd_correio','qtd_carga'], -1)
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['nome_aeroporto_partida', 'continente_partida',
+                                                                                    'pais_partida', 'cidade_partida',
+                                                                                    'tipo_aero_chegada','nome_aeroporto_chegada', 'continente_chegada', 
+                                                                                    'pais_chegada', 'cidade_chegada'], 'Não Informado')
 
         output_path = f"s3a://{bucket}/gold"
         df_enriched_reordered.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
