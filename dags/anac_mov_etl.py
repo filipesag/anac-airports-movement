@@ -9,10 +9,9 @@ from src.data_enriching import DataEnriching
 from pyspark.sql.window import Window
 from pyspark.sql.functions import broadcast
 from pyspark.sql.types import StringType, IntegerType, DoubleType, TimestampType
-from pyspark.sql.functions import lit
-from pyspark.sql.types import DateType
 from airflow.models import Variable
 import logging
+import uuid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,11 +27,11 @@ aws_secret_key = Variable.get("AWS_SECRET_ACCESS_KEY")
     schedule="@once",
     catchup=False,
     owner_links={'Linkedin':'https://www.linkedin.com/in/filipe-aguiar-421269b5/'},
-    tags=["anac", "etl","aws","snowflake"]
+    tags=["anac", "etl","aws"]
 )
 def anac_etl():
 
-    @task(task_id="anac_scraping", retries=3)
+    @task(task_id="anac_scraping")
     def scraping_and_save_to_s3():
 
         logging.info("Starting Anac Scraping to collect Services Types Data")
@@ -54,7 +53,6 @@ def anac_etl():
     @task(task_id="transform_anac_mov_files")
     def transform_anac_mov_files():
 
-        
         logging.info("Starting Anac Files Processing")
 
         spark = (
@@ -67,8 +65,9 @@ def anac_etl():
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
             .config("spark.driver.memory", "4g")
-            .config("spark.executor.memory", "4g")
+            .config("spark.executor.memory", "6g")
             .config("spark.sql.parquet.int96RebaseModeInWrite", "CORRECTED")
+            .config("spark.sql.shuffle.partitions", "16")
             .getOrCreate()
         )
 
@@ -149,21 +148,10 @@ def anac_etl():
         df_normal = processor.select_and_rename_columns(df_normal, anac_mov_columns_default)
 
         #evitando shuffle
-        df_normal = df_normal.repartition(100)
-        df_problematic = df_problematic.repartition(100)
+        df_normal = df_normal.repartition(50)
+        df_problematic = df_problematic.repartition(50)
 
         df_final = df_normal.unionByName(df_problematic)
-
-        df_final = processor.replace_null_values(df_final, ['ano'], 'Ano não informado')
-        df_final = processor.replace_null_values(df_final, ['aeroporto_ref','aeroporto_outro'], 'Aeroporto não informado')
-        df_final = processor.replace_null_values(df_final, ['matricula_aeronave'], 'Matrícula não informada')
-        df_final = processor.replace_null_values(df_final, ['aeronave_modelo_icao'], 'Modelo não informado')
-        df_final = processor.replace_null_values(df_final, ['aeronave_operador'], 'Operador não informado')
-        df_final = processor.replace_null_values(df_final, ['numero_voo'], 'Número de voo não informado')
-        df_final = processor.replace_null_values(df_final, ['tipo_servico'], 'Serviço não informado')
-        df_final = processor.replace_null_values(df_final, ['natureza_operacao'], 'Tipo de operação não informada')
-        df_final = processor.replace_null_values(df_final, ['data_prevista_movimento','data_calco','data_manobra'], 'Data não informada')
-        df_final = processor.replace_null_values(df_final, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')
         
         df_final = df_final.withColumn("mes", F.when(F.col("mes") == 1, "Janeiro").
                                        when(F.col("mes") == 2, "Fevereiro").
@@ -181,7 +169,7 @@ def anac_etl():
 
         df_final = df_final.withColumn("natureza_operacao", F.when(F.col("natureza_operacao")=="D", "Doméstico").
                                        when(F.col("natureza_operacao")=="I", "Internacional").
-                                       otherwise("Mês não informado"))
+                                       otherwise("Não informado"))
         
         
         w = Window.partitionBy(['data_prevista_movimento','data_calco','data_manobra','hora_prevista_movimento','hora_calco','hora_manobra']).orderBy("data_calco") 
@@ -192,7 +180,18 @@ def anac_etl():
         .withColumn("data_manobra", F.to_date("data_manobra")) \
         .withColumn("hora_prevista_movimento", F.date_format("hora_prevista_movimento", "HH:mm")) \
         .withColumn("hora_calco", F.date_format("hora_calco", "HH:mm")) \
-        .withColumn("hora_manobra", F.date_format("hora_manobra", "HH:mm"))     
+        .withColumn("hora_manobra", F.date_format("hora_manobra", "HH:mm")) 
+
+        df_final = processor.replace_null_values(df_final, ['ano'], 'Ano não informado')
+        df_final = processor.replace_null_values(df_final, ['aeroporto_ref','aeroporto_outro'], 'Aeroporto não informado')
+        df_final = processor.replace_null_values(df_final, ['matricula_aeronave'], 'Matrícula não informada')
+        df_final = processor.replace_null_values(df_final, ['aeronave_modelo_icao'], 'Modelo não informado')
+        df_final = processor.replace_null_values(df_final, ['aeronave_operador'], 'Operador não informado')
+        df_final = processor.replace_null_values(df_final, ['numero_voo'], 'Número de voo não informado')
+        df_final = processor.replace_null_values(df_final, ['tipo_servico'], 'Serviço não informado')
+        df_final = processor.replace_null_values(df_final, ['natureza_operacao'], 'Tipo de operação não informada')
+        df_final = processor.replace_null_values(df_final, ['data_prevista_movimento','data_calco','data_manobra'], 'Data não informada')
+        df_final = processor.replace_null_values(df_final, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')    
 
         output_path = f"s3a://{bucket}/silver"
     
@@ -270,7 +269,8 @@ def anac_etl():
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
             .config("spark.driver.memory", "4g")
-            .config("spark.executor.memory", "4g")
+            .config("spark.executor.memory", "6g")
+            .config("spark.sql.shuffle.partitions", "16")
             .getOrCreate()
         )
 
@@ -283,8 +283,7 @@ def anac_etl():
                         "name":"nome_aeroporto",
                         "continent":"continente",
                         "iso_country":"pais_iso",
-                        "municipality":"cidade"
-                        }
+                        "municipality":"cidade"}
 
         airports_fields_default = [
             ("ident", StringType(), True), ("type", StringType(), True), ("name", StringType(), True),
@@ -324,7 +323,9 @@ def anac_etl():
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
             .config("spark.driver.memory", "4g")
-            .config("spark.executor.memory", "4g")
+            .config("spark.executor.memory", "6g")
+            .config("spark.executor.memoryOverhead", "1g")
+            .config("spark.sql.shuffle.partitions", "16")
             .getOrCreate()
         )
 
@@ -374,7 +375,6 @@ def anac_etl():
             "cidade as cidade_chegada"
         )
 
-        
         df_enriched = df_enriched \
             .join(broadcast(df_airports_partida), df_enriched["aeroporto_partida"] == F.col("aeroporto_partida_icao"), "left") \
             .join(broadcast(df_airports_chegada), df_enriched["aeroporto_chegada"] == F.col("aeroporto_chegada_icao"), "left")
@@ -412,7 +412,7 @@ def anac_etl():
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['numero_voo'], 'Número de voo não informado')
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc'], 'Serviço não informado')
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['natureza_operacao'], 'Tipo de operação não informada')
-        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['data_prevista_movimento','data_calco','data_manobra'], "1900-01-01")
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['data_prevista_movimento','data_calco','data_manobra'],  F.lit("1900-01-01").cast("date"))
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['numero_voo','qtd_pax_local','qtd_pax_conexao_domestico','qtd_pax_conexao_internacional', 
                             'qtd_correio','qtd_carga'], -1)
@@ -420,15 +420,90 @@ def anac_etl():
                                                                                     'pais_partida', 'cidade_partida',
                                                                                     'tipo_aero_chegada','nome_aeroporto_chegada', 'continente_chegada', 
                                                                                     'pais_chegada', 'cidade_chegada'], 'Não Informado')
+        
+        
+        uuid_udf = F.udf(lambda: str(uuid.uuid4()), StringType())
+
+        dim_tempo = (
+            df_enriched_reordered.select('data_prevista_movimento', 'hora_prevista_movimento', 'data_calco', 
+                            'hora_calco', 'data_manobra','hora_manobra','ano', 'mes', 'dia_semana')
+            .dropDuplicates()
+            .withColumn("tempo_id", uuid_udf())
+        )
+
+        dim_partida = (
+            df_enriched_reordered.select('aeroporto_partida', 'tipo_aero_partida', 'nome_aeroporto_partida', 'continente_partida', 'pais_partida', 'cidade_partida')
+            .dropDuplicates()
+            .withColumn("partida_id", uuid_udf())
+        )
+
+        dim_destino = (
+            df_enriched_reordered.select('aeroporto_chegada','tipo_aero_chegada', 'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada')
+            .dropDuplicates()
+            .withColumn("destino_id", uuid_udf())
+        )
+
+        dim_servico = (
+            df_enriched_reordered.select('cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc')
+            .dropDuplicates()
+            .withColumn("servico_id", uuid_udf())
+        )
+
+        dim_aeronave= (
+            df_enriched_reordered.select('matricula_aeronave','aeronave_modelo_icao','aeronave_operador')
+            .dropDuplicates()
+            .withColumn("aeronave_id", uuid_udf())
+        )
+
+        fato_voo = (
+            df_enriched_reordered.alias("f")
+            .join((dim_tempo).alias("t"),
+              (F.col("f.data_prevista_movimento") == F.col("t.data_prevista_movimento")) &
+              (F.col("f.hora_prevista_movimento") == F.col("t.hora_prevista_movimento")) &
+              (F.col("f.data_calco") == F.col("t.data_calco")) &
+              (F.col("f.hora_calco") == F.col("t.hora_calco")) &
+              (F.col("f.data_manobra") == F.col("t.data_manobra")) &
+              (F.col("f.hora_manobra") == F.col("t.hora_manobra")),
+              "left") \
+            .join(broadcast(dim_partida).alias("p"), F.col("f.aeroporto_partida") == F.col("p.aeroporto_partida"), "left")
+            .join(broadcast(dim_destino).alias("d"), F.col("f.aeroporto_chegada") == F.col("d.aeroporto_chegada"), "left")
+            .join(broadcast(dim_servico).alias("s"),  F.col("f.cod_tipo_servico")== F.col("s.cod_tipo_servico"), "left")
+            .join(broadcast(dim_aeronave).alias("a"), (F.col("f.matricula_aeronave") == F.col("a.matricula_aeronave")) & (F.col("f.aeronave_modelo_icao")== F.col("a.aeronave_modelo_icao")) & \
+                  (F.col("f.aeronave_operador") == F.col("a.aeronave_operador")), "left")
+            .select(
+                uuid_udf().alias('voo_id'),
+                'f.numero_voo',
+                'f.natureza_operacao',
+                'f.qtd_pax_local',
+                'f.qtd_pax_conexao_domestico',
+                'f.qtd_pax_conexao_internacional',
+                'f.qtd_correio',
+                'f.qtd_carga',
+                'f.pandemia_decreto',
+                'f.atraso',
+                't.tempo_id',
+                'p.partida_id',
+                'd.destino_id',
+                's.servico_id',
+                'a.aeronave_id'
+            )
+        )
 
         output_path = f"s3a://{bucket}/gold"
-        df_enriched_reordered.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
+        dim_tempo.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/dim_tempo")
+        dim_partida.write.mode("overwrite").partitionBy("tipo_aero_partida").parquet(f"{output_path}/anac_movimentacoes/dim_partida")
+        dim_destino.write.mode("overwrite").partitionBy("tipo_aero_chegada").parquet(f"{output_path}/anac_movimentacoes/dim_destino")
+        dim_servico.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/dim_servico")
+        dim_aeronave.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/dim_aeronave")
+        fato_voo.write.mode("overwrite").partitionBy("natureza_operacao").parquet(f"{output_path}/anac_movimentacoes/fato_voo")
 
-        print(df_enriched_reordered.head(1))
+        # print(df_enriched_reordered.head(1))
         # df_enriched_reordered.select([
         #     F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c)
         #     for c in df_enriched_reordered.columns
         # ]).show()
+
+        # print(fato_voo.count())
 
 
     scraping_and_save_to_s3() >> [transform_anac_mov_files(), transform_iata_service_file(), transform_airports_file()] >> enrich_anac_mov_files()
