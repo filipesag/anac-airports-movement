@@ -3,6 +3,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from airflow.decorators import dag, task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+from airflow.providers.amazon.aws.transfers.s3_to_redshift import S3ToRedshiftOperator
 from src.anac_web_scraping import scrape_iata_service_types
 from src.data_processing import DataProcessor
 from src.data_enriching import DataEnriching
@@ -65,9 +66,10 @@ def anac_etl():
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
             .config("spark.driver.memory", "4g")
-            .config("spark.executor.memory", "6g")
+            .config("spark.executor.memory", "8g")
             .config("spark.sql.parquet.int96RebaseModeInWrite", "CORRECTED")
             .config("spark.sql.shuffle.partitions", "16")
+            .config("spark.ui.port", "4041")
             .getOrCreate()
         )
 
@@ -148,8 +150,8 @@ def anac_etl():
         df_normal = processor.select_and_rename_columns(df_normal, anac_mov_columns_default)
 
         #evitando shuffle
-        df_normal = df_normal.repartition(50)
-        df_problematic = df_problematic.repartition(50)
+        # df_normal = df_normal.repartition(50)
+        # df_problematic = df_problematic.repartition(50)
 
         df_final = df_normal.unionByName(df_problematic)
         
@@ -172,7 +174,7 @@ def anac_etl():
                                        otherwise("Não informado"))
         
         
-        w = Window.partitionBy(['data_prevista_movimento','data_calco','data_manobra','hora_prevista_movimento','hora_calco','hora_manobra']).orderBy("data_calco") 
+        w = Window.partitionBy(['numero_voo','data_prevista_movimento','data_calco','data_manobra','hora_prevista_movimento','hora_calco','hora_manobra']).orderBy("data_calco") 
         df_final = df_final.withColumn("rn", F.row_number().over(w)).filter("rn = 1").drop("rn")
 
         df_final = df_final.withColumn("data_prevista_movimento", F.to_date("data_prevista_movimento")) \
@@ -182,22 +184,21 @@ def anac_etl():
         .withColumn("hora_calco", F.date_format("hora_calco", "HH:mm")) \
         .withColumn("hora_manobra", F.date_format("hora_manobra", "HH:mm")) 
 
-        df_final = processor.replace_null_values(df_final, ['ano'], 'Ano não informado')
-        df_final = processor.replace_null_values(df_final, ['aeroporto_ref','aeroporto_outro'], 'Aeroporto não informado')
-        df_final = processor.replace_null_values(df_final, ['matricula_aeronave'], 'Matrícula não informada')
-        df_final = processor.replace_null_values(df_final, ['aeronave_modelo_icao'], 'Modelo não informado')
-        df_final = processor.replace_null_values(df_final, ['aeronave_operador'], 'Operador não informado')
-        df_final = processor.replace_null_values(df_final, ['numero_voo'], 'Número de voo não informado')
-        df_final = processor.replace_null_values(df_final, ['tipo_servico'], 'Serviço não informado')
-        df_final = processor.replace_null_values(df_final, ['natureza_operacao'], 'Tipo de operação não informada')
-        df_final = processor.replace_null_values(df_final, ['data_prevista_movimento','data_calco','data_manobra'], 'Data não informada')
-        df_final = processor.replace_null_values(df_final, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')    
+        # df_final = processor.replace_null_values(df_final, ['ano'], 'Ano não informado')
+        # df_final = processor.replace_null_values(df_final, ['aeroporto_ref','aeroporto_outro'], 'Aeroporto não informado')
+        # df_final = processor.replace_null_values(df_final, ['matricula_aeronave'], 'Matrícula não informada')
+        # df_final = processor.replace_null_values(df_final, ['aeronave_modelo_icao'], 'Modelo não informado')
+        # df_final = processor.replace_null_values(df_final, ['aeronave_operador'], 'Operador não informado')
+        # df_final = processor.replace_null_values(df_final, ['numero_voo'], 'Número de voo não informado')
+        # df_final = processor.replace_null_values(df_final, ['tipo_servico'], 'Serviço não informado')
+        # df_final = processor.replace_null_values(df_final, ['natureza_operacao'], 'Tipo de operação não informada')
+        # df_final = processor.replace_null_values(df_final, ['data_prevista_movimento','data_calco','data_manobra'], 'Data não informada')
+        # df_final = processor.replace_null_values(df_final, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')    
 
         output_path = f"s3a://{bucket}/silver"
     
         df_final.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
-        print(df_final.head(5))
-        
+ 
         logging.info(f"File processed and saved in silver layer - Partitioned by year/month")
         
         spark.stop()
@@ -216,6 +217,7 @@ def anac_etl():
             .config("spark.local.dir", "/tmp/spark")
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
+            .config("spark.ui.port", "4041")
             .getOrCreate()
         )
 
@@ -270,7 +272,8 @@ def anac_etl():
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
             .config("spark.driver.memory", "4g")
             .config("spark.executor.memory", "6g")
-            .config("spark.sql.shuffle.partitions", "16")
+            .config("spark.sql.shuffle.partitions", "64")
+            .config("spark.ui.port", "4041")
             .getOrCreate()
         )
 
@@ -323,9 +326,10 @@ def anac_etl():
             .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true")
             .config("spark.driver.memory", "4g")
-            .config("spark.executor.memory", "6g")
+            .config("spark.executor.memory", "8g")
             .config("spark.executor.memoryOverhead", "1g")
-            .config("spark.sql.shuffle.partitions", "16")
+            .config("spark.sql.shuffle.partitions", "64")
+            .config("spark.ui.port", "4041")
             .getOrCreate()
         )
 
@@ -497,15 +501,96 @@ def anac_etl():
         dim_aeronave.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/dim_aeronave")
         fato_voo.write.mode("overwrite").partitionBy("natureza_operacao").parquet(f"{output_path}/anac_movimentacoes/fato_voo")
 
-        # print(df_enriched_reordered.head(1))
-        # df_enriched_reordered.select([
-        #     F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c)
-        #     for c in df_enriched_reordered.columns
-        # ]).show()
+        print(df_enriched_reordered.head(1))
+        df_enriched_reordered.select([
+            F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c)
+            for c in df_enriched_reordered.columns
+        ]).show()
 
-        # print(fato_voo.count())
+        print(fato_voo.count())
+
+    bucket = "anac-mov"
+    load_dim_tempo = S3ToRedshiftOperator(
+        task_id=f'load_dim_tempo_to_redshift',
+        s3_bucket=bucket,
+        s3_key=f'gold/anac_movimentacoes/dim_tempo',
+        schema='public',
+        table='dim_tempo',
+        copy_options=['FORMAT AS PARQUET'], 
+        aws_conn_id='aws_default', 
+        redshift_conn_id='redshift_conn'
+    )
+
+    load_dim_partida = S3ToRedshiftOperator(
+        task_id=f'load_dim_partida_to_redshift',
+        s3_bucket=bucket,
+        s3_key=f'gold/anac_movimentacoes/dim_partida',
+        schema='public',
+        table='dim_partida',
+        copy_options=['FORMAT AS PARQUET'], 
+        aws_conn_id='aws_default', 
+        redshift_conn_id='redshift_conn'
+    )
+
+    load_dim_destino = S3ToRedshiftOperator(
+        task_id=f'load_dim_destino_to_redshift',
+        s3_bucket=bucket,
+        s3_key=f'gold/anac_movimentacoes/dim_destino',
+        schema='public',
+        table='dim_destino',
+        copy_options=['FORMAT AS PARQUET'], 
+        aws_conn_id='aws_default', 
+        redshift_conn_id='redshift_conn'
+    )
+
+    load_dim_servico = S3ToRedshiftOperator(
+        task_id=f'load_dim_servico_to_redshift',
+        s3_bucket=bucket,
+        s3_key=f'gold/anac_movimentacoes/dim_servico',
+        schema='public',
+        table='dim_servico',
+        copy_options=['FORMAT AS PARQUET'], 
+        aws_conn_id='aws_default', 
+        redshift_conn_id='redshift_conn'
+    )
+
+    load_dim_aeronave = S3ToRedshiftOperator(
+        task_id=f'load_dim_aeronave_to_redshift',
+        s3_bucket=bucket,
+        s3_key=f'gold/anac_movimentacoes/dim_aeronave',
+        schema='public',
+        table='dim_aeronave',
+        copy_options=['FORMAT AS PARQUET'], 
+        aws_conn_id='aws_default', 
+        redshift_conn_id='redshift_conn'
+    )
+   
+
+    load_fato_voo = S3ToRedshiftOperator(
+        task_id=f'load_fato_voo_to_redshift',
+        s3_bucket=bucket,
+        s3_key=f'gold/anac_movimentacoes/fato_voo',
+        schema='public',
+        table='fato_voo',
+        copy_options=['FORMAT AS PARQUET'], 
+        aws_conn_id='aws_default', 
+        redshift_conn_id='redshift_conn'
+    )
+ 
 
 
-    scraping_and_save_to_s3() >> [transform_anac_mov_files(), transform_iata_service_file(), transform_airports_file()] >> enrich_anac_mov_files()
+    scraping = scraping_and_save_to_s3()
+    transform_tasks = [
+        transform_anac_mov_files(),
+        transform_iata_service_file(),
+        transform_airports_file()
+    ]
+    enrich_task = enrich_anac_mov_files()
+
+    scraping >> transform_tasks
+    transform_tasks >> enrich_task
+    enrich_task >> [load_dim_tempo,load_dim_aeronave,load_dim_destino,load_dim_partida,load_dim_servico] >> load_fato_voo
+
+
 
 anac_etl()
