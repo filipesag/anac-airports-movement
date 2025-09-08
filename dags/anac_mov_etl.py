@@ -184,19 +184,7 @@ def anac_etl():
         .withColumn("hora_calco", F.date_format("hora_calco", "HH:mm")) \
         .withColumn("hora_manobra", F.date_format("hora_manobra", "HH:mm")) 
 
-        # df_final = processor.replace_null_values(df_final, ['ano'], 'Ano não informado')
-        # df_final = processor.replace_null_values(df_final, ['aeroporto_ref','aeroporto_outro'], 'Aeroporto não informado')
-        # df_final = processor.replace_null_values(df_final, ['matricula_aeronave'], 'Matrícula não informada')
-        # df_final = processor.replace_null_values(df_final, ['aeronave_modelo_icao'], 'Modelo não informado')
-        # df_final = processor.replace_null_values(df_final, ['aeronave_operador'], 'Operador não informado')
-        # df_final = processor.replace_null_values(df_final, ['numero_voo'], 'Número de voo não informado')
-        # df_final = processor.replace_null_values(df_final, ['tipo_servico'], 'Serviço não informado')
-        # df_final = processor.replace_null_values(df_final, ['natureza_operacao'], 'Tipo de operação não informada')
-        # df_final = processor.replace_null_values(df_final, ['data_prevista_movimento','data_calco','data_manobra'], 'Data não informada')
-        # df_final = processor.replace_null_values(df_final, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')    
-
         output_path = f"s3a://{bucket}/silver"
-    
         df_final.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/")
  
         logging.info(f"File processed and saved in silver layer - Partitioned by year/month")
@@ -428,37 +416,52 @@ def anac_etl():
         
         uuid_udf = F.udf(lambda: str(uuid.uuid4()), StringType())
 
+        # DIMENSAO TEMPO
         dim_tempo = (
             df_enriched_reordered.select('data_prevista_movimento', 'hora_prevista_movimento', 'data_calco', 
                             'hora_calco', 'data_manobra','hora_manobra','ano', 'mes', 'dia_semana')
-            .dropDuplicates()
-            .withColumn("tempo_id", uuid_udf())
         )
+        w = Window.partitionBy(['data_prevista_movimento', 'hora_prevista_movimento', 'data_calco', 
+                            'hora_calco', 'data_manobra','hora_manobra','ano', 'mes', 'dia_semana']).orderBy("data_calco") 
+        dim_tempo = dim_tempo.withColumn("rn", F.row_number().over(w)).filter("rn = 1").drop("rn")
+        dim_tempo = dim_tempo.withColumn("tempo_id", uuid_udf())
 
+        # DIMENSAO PARTIDA
         dim_partida = (
             df_enriched_reordered.select('aeroporto_partida', 'tipo_aero_partida', 'nome_aeroporto_partida', 'continente_partida', 'pais_partida', 'cidade_partida')
-            .dropDuplicates()
-            .withColumn("partida_id", uuid_udf())
         )
+        w = Window.partitionBy(['aeroporto_partida', 'tipo_aero_partida', 'nome_aeroporto_partida', 'continente_partida', 'pais_partida', 'cidade_partida']).orderBy("aeroporto_partida") 
+        dim_partida = dim_partida.withColumn("rn", F.row_number().over(w)).filter("rn = 1").drop("rn")
+        dim_partida = dim_partida.withColumn("partida_id", uuid_udf())
 
+        # DIMENSAO DESTINO
         dim_destino = (
             df_enriched_reordered.select('aeroporto_chegada','tipo_aero_chegada', 'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada')
-            .dropDuplicates()
-            .withColumn("destino_id", uuid_udf())
         )
+        w = Window.partitionBy(['aeroporto_chegada','tipo_aero_chegada', 'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada']).orderBy("aeroporto_chegada") 
+        dim_destino = dim_destino.withColumn("rn", F.row_number().over(w)).filter("rn = 1").drop("rn")
+        dim_destino = dim_destino.withColumn("destino_id", uuid_udf())
 
+
+        # DIMENSAO SERVICO
         dim_servico = (
             df_enriched_reordered.select('cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc')
-            .dropDuplicates()
-            .withColumn("servico_id", uuid_udf())
         )
+        w = Window.partitionBy(['cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc']).orderBy("cod_tipo_servico") 
+        dim_servico = dim_servico.withColumn("rn", F.row_number().over(w)).filter("rn = 1").drop("rn")
+        dim_servico = dim_servico.withColumn("servico_id", uuid_udf())
 
+
+        # DIMENSAO AERONAVE
         dim_aeronave= (
             df_enriched_reordered.select('matricula_aeronave','aeronave_modelo_icao','aeronave_operador')
-            .dropDuplicates()
-            .withColumn("aeronave_id", uuid_udf())
         )
+        w = Window.partitionBy(['matricula_aeronave','aeronave_modelo_icao','aeronave_operador']).orderBy("matricula_aeronave") 
+        dim_aeronave = dim_aeronave.withColumn("rn", F.row_number().over(w)).filter("rn = 1").drop("rn")
+        dim_aeronave = dim_aeronave.withColumn("aeronave_id", uuid_udf())
 
+
+        # TABELA FATO
         fato_voo = (
             df_enriched_reordered.alias("f")
             .join((dim_tempo).alias("t"),
@@ -494,88 +497,87 @@ def anac_etl():
         )
 
         output_path = f"s3a://{bucket}/gold"
-        dim_tempo.write.mode("overwrite").partitionBy("ano", "mes").parquet(f"{output_path}/anac_movimentacoes/dim_tempo")
-        dim_partida.write.mode("overwrite").partitionBy("tipo_aero_partida").parquet(f"{output_path}/anac_movimentacoes/dim_partida")
-        dim_destino.write.mode("overwrite").partitionBy("tipo_aero_chegada").parquet(f"{output_path}/anac_movimentacoes/dim_destino")
+        dim_tempo.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/dim_tempo")
+        dim_partida.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/dim_partida")
+        dim_destino.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/dim_destino")
         dim_servico.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/dim_servico")
         dim_aeronave.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/dim_aeronave")
-        fato_voo.write.mode("overwrite").partitionBy("natureza_operacao").parquet(f"{output_path}/anac_movimentacoes/fato_voo")
+        fato_voo.write.mode("overwrite").parquet(f"{output_path}/anac_movimentacoes/fato_voo")
 
-        print(df_enriched_reordered.head(1))
-        df_enriched_reordered.select([
-            F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c)
-            for c in df_enriched_reordered.columns
-        ]).show()
+        dim_tempo.printSchema()
+        dim_partida.printSchema()
+        dim_destino.printSchema()
+        dim_servico.printSchema()
+        dim_aeronave.printSchema()
+        fato_voo.printSchema()
 
-        print(fato_voo.count())
+    # bucket = "anac-mov"
+    # load_dim_tempo = S3ToRedshiftOperator(
+    #     task_id=f'load_dim_tempo_to_redshift',
+    #     s3_bucket=bucket,
+    #     s3_key=f'gold/anac_movimentacoes/dim_tempo',
+    #     schema='public',
+    #     table='dim_tempo',
+    #     copy_options=['FORMAT AS PARQUET'], 
+    #     aws_conn_id='aws_default', 
+    #     redshift_conn_id='redshift_conn'
+    # )
 
-    bucket = "anac-mov"
-    load_dim_tempo = S3ToRedshiftOperator(
-        task_id=f'load_dim_tempo_to_redshift',
-        s3_bucket=bucket,
-        s3_key=f'gold/anac_movimentacoes/dim_tempo',
-        schema='public',
-        table='dim_tempo',
-        copy_options=['FORMAT AS PARQUET'], 
-        aws_conn_id='aws_default', 
-        redshift_conn_id='redshift_conn'
-    )
+    # load_dim_partida = S3ToRedshiftOperator(
+    #     task_id=f'load_dim_partida_to_redshift',
+    #     s3_bucket=bucket,
+    #     s3_key=f'gold/anac_movimentacoes/dim_partida',
+    #     schema='public',
+    #     table='dim_partida',
+    #     copy_options=['FORMAT AS PARQUET'], 
+    #     aws_conn_id='aws_default', 
+    #     redshift_conn_id='redshift_conn'
+    # )
 
-    load_dim_partida = S3ToRedshiftOperator(
-        task_id=f'load_dim_partida_to_redshift',
-        s3_bucket=bucket,
-        s3_key=f'gold/anac_movimentacoes/dim_partida',
-        schema='public',
-        table='dim_partida',
-        copy_options=['FORMAT AS PARQUET'], 
-        aws_conn_id='aws_default', 
-        redshift_conn_id='redshift_conn'
-    )
+    # load_dim_destino = S3ToRedshiftOperator(
+    #     task_id=f'load_dim_destino_to_redshift',
+    #     s3_bucket=bucket,
+    #     s3_key=f'gold/anac_movimentacoes/dim_destino',
+    #     schema='public',
+    #     table='dim_destino',
+    #     copy_options=['FORMAT AS PARQUET'], 
+    #     aws_conn_id='aws_default', 
+    #     redshift_conn_id='redshift_conn'
+    # )
 
-    load_dim_destino = S3ToRedshiftOperator(
-        task_id=f'load_dim_destino_to_redshift',
-        s3_bucket=bucket,
-        s3_key=f'gold/anac_movimentacoes/dim_destino',
-        schema='public',
-        table='dim_destino',
-        copy_options=['FORMAT AS PARQUET'], 
-        aws_conn_id='aws_default', 
-        redshift_conn_id='redshift_conn'
-    )
+    # load_dim_servico = S3ToRedshiftOperator(
+    #     task_id=f'load_dim_servico_to_redshift',
+    #     s3_bucket=bucket,
+    #     s3_key=f'gold/anac_movimentacoes/dim_servico',
+    #     schema='public',
+    #     table='dim_servico',
+    #     copy_options=['FORMAT AS PARQUET'], 
+    #     aws_conn_id='aws_default', 
+    #     redshift_conn_id='redshift_conn'
+    # )
 
-    load_dim_servico = S3ToRedshiftOperator(
-        task_id=f'load_dim_servico_to_redshift',
-        s3_bucket=bucket,
-        s3_key=f'gold/anac_movimentacoes/dim_servico',
-        schema='public',
-        table='dim_servico',
-        copy_options=['FORMAT AS PARQUET'], 
-        aws_conn_id='aws_default', 
-        redshift_conn_id='redshift_conn'
-    )
-
-    load_dim_aeronave = S3ToRedshiftOperator(
-        task_id=f'load_dim_aeronave_to_redshift',
-        s3_bucket=bucket,
-        s3_key=f'gold/anac_movimentacoes/dim_aeronave',
-        schema='public',
-        table='dim_aeronave',
-        copy_options=['FORMAT AS PARQUET'], 
-        aws_conn_id='aws_default', 
-        redshift_conn_id='redshift_conn'
-    )
+    # load_dim_aeronave = S3ToRedshiftOperator(
+    #     task_id=f'load_dim_aeronave_to_redshift',
+    #     s3_bucket=bucket,
+    #     s3_key=f'gold/anac_movimentacoes/dim_aeronave',
+    #     schema='public',
+    #     table='dim_aeronave',
+    #     copy_options=['FORMAT AS PARQUET'], 
+    #     aws_conn_id='aws_default', 
+    #     redshift_conn_id='redshift_conn'
+    # )
    
 
-    load_fato_voo = S3ToRedshiftOperator(
-        task_id=f'load_fato_voo_to_redshift',
-        s3_bucket=bucket,
-        s3_key=f'gold/anac_movimentacoes/fato_voo',
-        schema='public',
-        table='fato_voo',
-        copy_options=['FORMAT AS PARQUET'], 
-        aws_conn_id='aws_default', 
-        redshift_conn_id='redshift_conn'
-    )
+    # load_fato_voo = S3ToRedshiftOperator(
+    #     task_id=f'load_fato_voo_to_redshift',
+    #     s3_bucket=bucket,
+    #     s3_key=f'gold/anac_movimentacoes/fato_voo',
+    #     schema='public',
+    #     table='fato_voo',
+    #     copy_options=['FORMAT AS PARQUET'], 
+    #     aws_conn_id='aws_default', 
+    #     redshift_conn_id='redshift_conn'
+    # )
  
 
 
@@ -589,7 +591,7 @@ def anac_etl():
 
     scraping >> transform_tasks
     transform_tasks >> enrich_task
-    enrich_task >> [load_dim_tempo,load_dim_aeronave,load_dim_destino,load_dim_partida,load_dim_servico] >> load_fato_voo
+    # enrich_task >> [load_dim_tempo,load_dim_aeronave,load_dim_destino,load_dim_partida,load_dim_servico] >> load_fato_voo
 
 
 
