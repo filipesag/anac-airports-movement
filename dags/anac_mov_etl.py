@@ -482,82 +482,6 @@ def anac_etl():
         dim_aeronave.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/dim_aeronave')
         fato_voo.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/fato_voo')
 
-        # dim_tempo.printSchema()
-        # dim_partida.printSchema()
-        # dim_destino.printSchema()
-        # dim_servico.printSchema()
-        # dim_aeronave.printSchema()
-        # fato_voo.printSchema()
-
-    # bucket = 'anac-mov'
-    # load_dim_tempo = S3ToRedshiftOperator(
-    #     task_id=f'load_dim_tempo_to_redshift',
-    #     s3_bucket=bucket,
-    #     s3_key=f'gold/anac_movimentacoes/dim_tempo',
-    #     schema='public',
-    #     table='dim_tempo',
-    #     copy_options=['FORMAT AS PARQUET'], 
-    #     aws_conn_id='aws_default', 
-    #     redshift_conn_id='redshift_conn'
-    # )
-
-    # load_dim_partida = S3ToRedshiftOperator(
-    #     task_id=f'load_dim_partida_to_redshift',
-    #     s3_bucket=bucket,
-    #     s3_key=f'gold/anac_movimentacoes/dim_partida',
-    #     schema='public',
-    #     table='dim_partida',
-    #     copy_options=['FORMAT AS PARQUET'], 
-    #     aws_conn_id='aws_default', 
-    #     redshift_conn_id='redshift_conn'
-    # )
-
-    # load_dim_destino = S3ToRedshiftOperator(
-    #     task_id=f'load_dim_destino_to_redshift',
-    #     s3_bucket=bucket,
-    #     s3_key=f'gold/anac_movimentacoes/dim_destino',
-    #     schema='public',
-    #     table='dim_destino',
-    #     copy_options=['FORMAT AS PARQUET'], 
-    #     aws_conn_id='aws_default', 
-    #     redshift_conn_id='redshift_conn'
-    # )
-
-    # load_dim_servico = S3ToRedshiftOperator(
-    #     task_id=f'load_dim_servico_to_redshift',
-    #     s3_bucket=bucket,
-    #     s3_key=f'gold/anac_movimentacoes/dim_servico',
-    #     schema='public',
-    #     table='dim_servico',
-    #     copy_options=['FORMAT AS PARQUET'], 
-    #     aws_conn_id='aws_default', 
-    #     redshift_conn_id='redshift_conn'
-    # )
-
-    # load_dim_aeronave = S3ToRedshiftOperator(
-    #     task_id=f'load_dim_aeronave_to_redshift',
-    #     s3_bucket=bucket,
-    #     s3_key=f'gold/anac_movimentacoes/dim_aeronave',
-    #     schema='public',
-    #     table='dim_aeronave',
-    #     copy_options=['FORMAT AS PARQUET'], 
-    #     aws_conn_id='aws_default', 
-    #     redshift_conn_id='redshift_conn'
-    # )
-   
-
-    # load_fato_voo = S3ToRedshiftOperator(
-    #     task_id=f'load_fato_voo_to_redshift',
-    #     s3_bucket=bucket,
-    #     s3_key=f'gold/anac_movimentacoes/fato_voo',
-    #     schema='public',
-    #     table='fato_voo',
-    #     copy_options=['FORMAT AS PARQUET'], 
-    #     aws_conn_id='aws_default', 
-    #     redshift_conn_id='redshift_conn'
-    # )
- 
-
     scraping = scraping_and_save_to_s3()
     transform_tasks = [
         transform_anac_mov_files(),
@@ -568,8 +492,5 @@ def anac_etl():
 
     scraping >> transform_tasks
     transform_tasks >> enrich_task
-    # enrich_task >> [load_dim_tempo,load_dim_aeronave,load_dim_destino,load_dim_partida,load_dim_servico] >> load_fato_voo
-
-
 
 anac_etl()
