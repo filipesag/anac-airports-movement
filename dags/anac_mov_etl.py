@@ -6,20 +6,18 @@ from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from src.anac_web_scraping import scrape_iata_service_types
 from src.data_processing import DataProcessor
 from src.data_enriching import DataEnriching
+from src.utils import create_spark
 from pyspark.sql.window import Window
 from pyspark.sql.functions import broadcast
 from pyspark.sql.types import StringType, IntegerType, DoubleType, TimestampType
 from airflow.models import Variable
 import logging
-import uuid
+
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
-
-aws_access_key = Variable.get('AWS_ACCESS_KEY_ID')
-aws_secret_key = Variable.get('AWS_SECRET_ACCESS_KEY')
 
 @dag(
     dag_id='anac_etl',
@@ -30,6 +28,7 @@ aws_secret_key = Variable.get('AWS_SECRET_ACCESS_KEY')
     tags=['anac', 'etl','aws']
 )
 def anac_etl():
+
 
     @task(task_id='anac_scraping')
     def scraping_and_save_to_s3():
@@ -55,25 +54,9 @@ def anac_etl():
 
         logging.info('Starting Anac Files Processing')
 
-        spark = (
-            SparkSession.builder
-            .appName('ANAC_Data_Processing')
-            .config('spark.hadoop.fs.s3a.access.key', aws_access_key)
-            .config('spark.hadoop.fs.s3a.secret.key', aws_secret_key)
-            .config('spark.hadoop.fs.s3a.endpoint', 's3.amazonaws.com')
-            .config('spark.local.dir', '/tmp/spark')
-            .config('spark.hadoop.fs.s3a.impl', 'org.apache.hadoop.fs.s3a.S3AFileSystem')
-            .config('spark.hadoop.fs.s3a.connection.ssl.enabled', 'true')
-            .config('spark.driver.memory', '4g')
-            .config('spark.executor.memory', '8g')
-            .config('spark.sql.parquet.int96RebaseModeInWrite', 'CORRECTED')
-            .config('spark.sql.shuffle.partitions', '16')
-            .config('spark.ui.port', '4041')
-            .getOrCreate()
-        )
-
-      
+        spark = create_spark() 
         processor = DataProcessor(spark)
+
         s3_hook = S3Hook(aws_conn_id='aws_default')
         bucket = 'anac-mov'
         
@@ -190,18 +173,7 @@ def anac_etl():
     def transform_iata_service_file():
         logging.info('Starting Iata Service File Processing')
 
-        spark = (
-            SparkSession.builder
-            .appName('IATA_Data_Processing')
-            .config('spark.hadoop.fs.s3a.access.key', aws_access_key)
-            .config('spark.hadoop.fs.s3a.secret.key', aws_secret_key)
-            .config('spark.hadoop.fs.s3a.endpoint', 's3.amazonaws.com')
-            .config('spark.local.dir', '/tmp/spark')
-            .config('spark.hadoop.fs.s3a.impl', 'org.apache.hadoop.fs.s3a.S3AFileSystem')
-            .config('spark.hadoop.fs.s3a.connection.ssl.enabled', 'true')
-            .config('spark.ui.port', '4041')
-            .getOrCreate()
-        )
+        spark = create_spark() 
 
         s3_hook = S3Hook(aws_conn_id='aws_default')
         bucket = 'anac-mov'
@@ -243,24 +215,9 @@ def anac_etl():
     def transform_airports_file():
         logging.info('Starting Icao Airports Files Processing')
 
-        spark = (
-            SparkSession.builder
-            .appName('ANAC_Data_Processing')
-            .config('spark.hadoop.fs.s3a.access.key', aws_access_key)
-            .config('spark.hadoop.fs.s3a.secret.key', aws_secret_key)
-            .config('spark.hadoop.fs.s3a.endpoint', 's3.amazonaws.com')
-            .config('spark.local.dir', '/tmp/spark')
-            .config('spark.hadoop.fs.s3a.impl', 'org.apache.hadoop.fs.s3a.S3AFileSystem')
-            .config('spark.hadoop.fs.s3a.connection.ssl.enabled', 'true')
-            .config('spark.driver.memory', '4g')
-            .config('spark.executor.memory', '6g')
-            .config('spark.sql.shuffle.partitions', '64')
-            .config('spark.ui.port', '4041')
-            .getOrCreate()
-        )
-
         bucket = 'anac-mov'
 
+        spark = create_spark() 
         processor = DataProcessor(spark)
 
         airpots_columns = {'ident':'aeroporto_icao',
@@ -294,31 +251,18 @@ def anac_etl():
         
         logging.info(f'File processed and saved in silver layer')
 
+        spark.stop()
+
     @task(task_id='enrich_data')
     def enrich_anac_mov_files():
         logging.info('Starting Anac Files Enriching')
 
-        spark = (
-            SparkSession.builder
-            .appName('ANAC_Data_Processing')
-            .config('spark.hadoop.fs.s3a.access.key', aws_access_key)
-            .config('spark.hadoop.fs.s3a.secret.key', aws_secret_key)
-            .config('spark.hadoop.fs.s3a.endpoint', 's3.amazonaws.com')
-            .config('spark.local.dir', '/tmp/spark')
-            .config('spark.hadoop.fs.s3a.impl', 'org.apache.hadoop.fs.s3a.S3AFileSystem')
-            .config('spark.hadoop.fs.s3a.connection.ssl.enabled', 'true')
-            .config('spark.driver.memory', '6g')
-            .config('spark.executor.memory', '8g')
-            .config('spark.executor.memoryOverhead', '1g')
-            .config('spark.sql.shuffle.partitions', '16')
-            .config('spark.ui.port', '4041')
-            .getOrCreate()
-        )
+        spark = create_spark() 
+        processor = DataProcessor(spark)
+        enrich = DataEnriching(spark)
 
         spark.conf.set('spark.sql.legacy.parquet.int96RebaseModeInWrite', 'LEGACY')
         
-        enrich = DataEnriching(spark)
-        processor = DataProcessor(spark)
         bucket = 'anac-mov'
 
         df_anac = spark.read.parquet(f's3a://{bucket}/silver/anac_movimentacoes/')
@@ -473,6 +417,9 @@ def anac_etl():
         dim_servico.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/dim_servico')
         dim_aeronave.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/dim_aeronave')
         fato_voo.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/fato_voo')
+
+        spark.stop()
+
 
     scraping = scraping_and_save_to_s3()
     transform_tasks = [
