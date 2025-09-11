@@ -3,7 +3,6 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from airflow.decorators import dag, task
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.providers.amazon.aws.transfers.s3_to_redshift import S3ToRedshiftOperator
 from src.anac_web_scraping import scrape_iata_service_types
 from src.data_processing import DataProcessor
 from src.data_enriching import DataEnriching
@@ -148,10 +147,6 @@ def anac_etl():
         df_normal = spark.read.option('header', 'true').option('nullValue', 'null').schema(processor.create_schema(anac_mov_fields_default)).csv(normal_files, sep=';')
         
         df_normal = processor.select_and_rename_columns(df_normal, anac_mov_columns_default)
-
-        #evitando shuffle
-        # df_normal = df_normal.repartition(50)
-        # df_problematic = df_problematic.repartition(50)
 
         df_final = df_normal.unionByName(df_problematic)
         
@@ -411,9 +406,6 @@ def anac_etl():
                                                                                     'pais_partida', 'cidade_partida',
                                                                                     'tipo_aero_chegada','nome_aeroporto_chegada', 'continente_chegada', 
                                                                                     'pais_chegada', 'cidade_chegada'], 'Não Informado')
-        
-        
-        uuid_udf = F.udf(lambda: str(uuid.uuid4()), StringType())
 
         df_enriched_reordered = df_enriched_reordered.withColumn('voo_id', F.monotonically_increasing_id()) \
         .withColumn('tempo_id', F.monotonically_increasing_id()) \
