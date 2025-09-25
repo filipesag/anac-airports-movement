@@ -64,7 +64,7 @@ def enrich_anac_mov_files():
         df_enriched = enrich.add_flag_covid(df_enriched)
         df_enriched = enrich.add_flag_delay(df_enriched)
         df_enriched = enrich.add_total_pax(df_enriched)
-
+        df_enriched = enrich.add_minutes_delay(df_enriched)
         df_enriched = enrich.set_airports(df_enriched)
 
         df_airports_partida = df_airports.selectExpr(
@@ -90,9 +90,9 @@ def enrich_anac_mov_files():
             .join(df_airports_chegada, df_enriched['aeroporto_chegada'] == F.col('aeroporto_chegada_icao'), 'left')
         
         selected_columns = ['numero_voo','qtd_pax_local','qtd_pax_conexao_domestico','qtd_pax_conexao_internacional','total_pax', 
-                            'qtd_correio','qtd_carga','pandemia_decreto','atraso','matricula_aeronave','aeronave_modelo_icao','aeronave_operador', 
+                            'pandemia_decreto','atraso','matricula_aeronave','aeronave_modelo_icao','aeronave_operador', 
                             'natureza_operacao','data_prevista_movimento', 'hora_prevista_movimento', 'data_calco', 
-                            'hora_calco', 'data_manobra','hora_manobra','ano', 'mes', 'dia_semana' ,'cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc', 
+                            'hora_calco', 'data_manobra','hora_manobra','tempo_atraso','ano', 'mes', 'dia_semana' ,'cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc', 
                             'aeroporto_partida', 'tipo_aero_partida', 'nome_aeroporto_partida', 'continente_partida', 'pais_partida', 'cidade_partida', 'aeroporto_chegada', 
                             'tipo_aero_chegada', 'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada']
 
@@ -123,9 +123,8 @@ def enrich_anac_mov_files():
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc'], 'Serviço não informado')
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['natureza_operacao'], 'Tipo de operação não informada')
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['data_prevista_movimento','data_calco','data_manobra'],  F.lit('1900-01-01').cast('date'))
-        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['hora_prevista_movimento','hora_calco','hora_manobra'], 'Hora não informada')
-        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['numero_voo','qtd_pax_local','qtd_pax_conexao_domestico','total_pax','qtd_pax_conexao_internacional', 
-                            'qtd_correio','qtd_carga'], -1)
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['hora_prevista_movimento','hora_calco','hora_manobra','tempo_atraso'], 'Hora não informada')
+        df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['qtd_pax_local','qtd_pax_conexao_domestico','total_pax','qtd_pax_conexao_internacional'], -1)
         df_enriched_reordered = processor.replace_null_values(df_enriched_reordered, ['nome_aeroporto_partida', 'continente_partida',
                                                                                     'pais_partida', 'cidade_partida',
                                                                                     'tipo_aero_chegada','nome_aeroporto_chegada', 'continente_chegada', 
@@ -180,10 +179,9 @@ def enrich_anac_mov_files():
                 'f.qtd_pax_conexao_domestico',
                 'f.qtd_pax_conexao_internacional',
                 'f.total_pax',
-                'f.qtd_correio',
-                'f.qtd_carga',
                 'f.pandemia_decreto',
                 'f.atraso',
+                'f.tempo_atraso',
                 't.tempo_id',
                 'p.partida_id',
                 'd.destino_id',

@@ -60,7 +60,7 @@ def anac_etl():
             "spark.executor.memory": "8g",
         },
         jars="/opt/spark/jars/hadoop-aws-3.3.2.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars/wildfly-openssl-1.0.7.Final.jar", 
-        verbose=True
+        verbose=False
     )
 
     
