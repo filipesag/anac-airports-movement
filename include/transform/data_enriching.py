@@ -12,12 +12,20 @@ class DataEnriching:
         return df
     
     def add_flag_delay(self, df):
-        time_diff_seconds = F.unix_timestamp(F.col('hora_manobra')) - F.unix_timestamp(F.col('hora_prevista_movimento'))
- 
-        delay_condition = (time_diff_seconds / 60 >= 30) & (F.col('natureza_operacao') == 'Doméstico') | (time_diff_seconds / 60 >= 60) & (F.col('natureza_operacao') == 'Internacional')
-       
-        df = df.withColumn('atraso', F.when(delay_condition, True).otherwise(False))
+        time_diff_seconds = (
+            F.unix_timestamp(F.col('hora_manobra'), "HH:mm")
+            - F.unix_timestamp(F.col('hora_prevista_movimento'), "HH:mm")
+        )
+
+        delay_condition = (
+            ((time_diff_seconds / 60 >= 30) & (F.col('natureza_operacao') == 'Doméstico'))
+            |
+            ((time_diff_seconds / 60 >= 60) & (F.col('natureza_operacao') == 'Internacional'))
+        )
+
+        df = df.withColumn("atraso", F.when(delay_condition, F.lit(True)).otherwise(F.lit(False)))
         return df
+
     
     def add_day_column(self, df):
         days = {
@@ -61,3 +69,26 @@ class DataEnriching:
             'total_pax', F.col('qtd_pax_local') + F.col('qtd_pax_conexao_domestico') + F.col('qtd_pax_conexao_internacional')
         )
         return df
+    
+    def add_minutes_delay(self, df):
+        time_diff_seconds = (
+            F.unix_timestamp(F.col('hora_manobra'), "HH:mm")
+            - F.unix_timestamp(F.col('hora_prevista_movimento'), "HH:mm")
+        )
+
+        time_diff_minutes = (time_diff_seconds / 60).cast('int')
+
+        df = df.withColumn(
+            'tempo_atraso',
+            F.when(
+                F.col('atraso') == True,
+                F.concat_ws(
+                    ':',
+                    F.lpad((time_diff_minutes / 60).cast('int'), 2, '0'),
+                    F.lpad((time_diff_minutes % 60).cast('int'), 2, '0')
+                )
+            ).otherwise(F.lit('00:00'))
+        )
+        return df
+
+    

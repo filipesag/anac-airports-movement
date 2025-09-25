@@ -49,13 +49,3 @@ class DataProcessor:
         return df
     
 
-if __name__ == '__main__':
-
-    spark = SparkSession.builder.appName('ANAC').getOrCreate()
-    print(spark.version)
-    
-    sc = spark.sparkContext
-    print('Driver:', sc.master)
-    print('Cores disponíveis:', sc.defaultParallelism)
-    print('Executors ativos:', sc._jsc.sc().getExecutorMemoryStatus().keys())
-
