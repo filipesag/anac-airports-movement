@@ -5,7 +5,6 @@ from include.tasks.anac_scraping import scraping_and_save_to_s3
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.models import Variable
 import logging
-
 from include.tasks.iata_transform import transform_iata_service_file
 
 
@@ -62,8 +61,7 @@ def anac_etl():
         jars="/opt/spark/jars/hadoop-aws-3.3.2.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars/wildfly-openssl-1.0.7.Final.jar", 
         verbose=False
     )
-
-    
+   
     transform_tasks = [
         anac,
         airports,
