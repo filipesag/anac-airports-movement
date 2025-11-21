@@ -62,6 +62,8 @@ def transform_iata_service_file():
 
         df_service_type = df_service_type.dropDuplicates()
 
+        df_service_type = df_service_type.coalesce(1)
+
         output_path_iata = f's3a://anac-mov/silver/anac_scraping/'
         df_service_type.write \
             .mode('overwrite') \
