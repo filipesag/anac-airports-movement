@@ -71,6 +71,8 @@ def transform_airports_file():
 
         airports_df = airports_df.dropDuplicates()
 
+        airports_df = airports_df.coalesce(1)
+
         output_path = f's3a://{bucket}/silver/icao_aeroportos/'
         airports_df.write \
             .mode('overwrite') \

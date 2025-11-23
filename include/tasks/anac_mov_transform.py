@@ -186,7 +186,7 @@ def transform_anac_mov_files():
         .withColumn('hora_manobra', F.date_format('hora_manobra', 'HH:mm')) 
 
         output_path = f's3a://{bucket}/silver'
-        df_final.write.mode('overwrite').partitionBy('ano', 'mes').parquet(f'{output_path}/anac_movimentacoes/')
+        df_final.repartition('ano', 'mes').write.mode('overwrite').partitionBy('ano','mes').parquet(f'{output_path}/anac_movimentacoes/')
 
         logging.info(f'File was processed and saved in silver layer - Partitioned by year/month')
 

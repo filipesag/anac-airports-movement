@@ -4,6 +4,7 @@ from include.transform.data_processing import DataProcessor
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.functions import broadcast
+from pyspark.sql.window import Window
 import traceback
 import sys
 import os
@@ -130,67 +131,82 @@ def enrich_anac_mov_files():
                                                                                     'tipo_aero_chegada','nome_aeroporto_chegada', 'continente_chegada', 
                                                                                     'pais_chegada', 'cidade_chegada'], 'Não Informado')
 
-        df_enriched_reordered = df_enriched_reordered.withColumn('voo_id', F.monotonically_increasing_id()) \
-        .withColumn('tempo_id', F.monotonically_increasing_id()) \
-        .withColumn('partida_id', F.monotonically_increasing_id()) \
-        .withColumn('destino_id', F.monotonically_increasing_id()) \
-        .withColumn('servico_id', F.monotonically_increasing_id()) \
-        .withColumn('aeronave_id', F.monotonically_increasing_id())
-
-        # DIMENSAO TEMPO
-        dim_tempo = df_enriched_reordered.select('tempo_id','data_manobra', 'ano', 'mes', 'dia_semana')
-        dim_tempo = dim_tempo.dropDuplicates(['data_manobra', 'ano', 'mes', 'dia_semana'])
-
-        # DIMENSAO PARTIDA
-        dim_partida = df_enriched_reordered.select('partida_id','aeroporto_partida', 'tipo_aero_partida', 'nome_aeroporto_partida', 'continente_partida', 'pais_partida', 'cidade_partida')
-        dim_partida = dim_partida.dropDuplicates(['aeroporto_partida'])
-
-        # DIMENSAO DESTINO
-        dim_destino = df_enriched_reordered.select('destino_id','aeroporto_chegada', 'tipo_aero_chegada', 'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada')
-        dim_destino = dim_destino.dropDuplicates(['aeroporto_chegada'])
-
-        # DIMENSAO SERVICO
-        dim_servico = df_enriched_reordered.select('servico_id','cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc')
-        dim_servico = dim_servico.dropDuplicates(['cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc'])
-
-        # DIMENSAO AERONAVE
-        dim_aeronave = df_enriched_reordered.select('aeronave_id','matricula_aeronave', 'aeronave_modelo_icao', 'aeronave_operador')
-        dim_aeronave = dim_aeronave.dropDuplicates(['matricula_aeronave', 'aeronave_modelo_icao', 'aeronave_operador'])
-
-
-        # TABELA FATO
-        fato_voo = df_enriched_reordered.alias('f') \
-            .join(broadcast(dim_tempo).alias('t'),
-                (F.col('f.data_manobra') == F.col('t.data_manobra')) & (F.col('f.ano') == F.col('t.ano')) & (F.col('f.mes') == F.col('t.mes')) & (F.col('f.dia_semana') == F.col('t.dia_semana')),
-                'left') \
-            .join(broadcast(dim_partida).alias('p'), F.col('f.aeroporto_partida') == F.col('p.aeroporto_partida'), 'left') \
-            .join(broadcast(dim_destino).alias('d'), F.col('f.aeroporto_chegada') == F.col('d.aeroporto_chegada'), 'left') \
-            .join(broadcast(dim_servico).alias('s'), F.col('f.cod_tipo_servico') == F.col('s.cod_tipo_servico'), 'left') \
-            .join(broadcast(dim_aeronave).alias('a'),
-                (F.col('f.matricula_aeronave') == F.col('a.matricula_aeronave')) &
-                (F.col('f.aeronave_modelo_icao') == F.col('a.aeronave_modelo_icao')) &
-                (F.col('f.aeronave_operador') == F.col('a.aeronave_operador')),
-                'left') \
-            .select(
-                'f.voo_id',
-                'f.numero_voo',
-                'f.natureza_operacao',
-                'f.qtd_pax_local',
-                'f.qtd_pax_conexao_domestico',
-                'f.qtd_pax_conexao_internacional',
-                'f.total_pax',
-                'f.pandemia_decreto',
-                'f.atraso',
-                'f.tempo_atraso',
-                't.tempo_id',
-                'p.partida_id',
-                'd.destino_id',
-                's.servico_id',
-                'a.aeronave_id'
-            )
+        dim_tempo = (df_enriched_reordered
+                    .select('data_manobra', 'ano', 'mes', 'dia_semana')
+                    .distinct()
+                    .withColumn("tempo_id", F.monotonically_increasing_id())
+                    .select('tempo_id', 'data_manobra', 'ano', 'mes', 'dia_semana'))
+        
+        # DIMENSAO PARTIDA - com chave própria
+        dim_partida = (df_enriched_reordered
+                    .select('aeroporto_partida', 'tipo_aero_partida', 'nome_aeroporto_partida', 
+                            'continente_partida', 'pais_partida', 'cidade_partida')
+                    .distinct()
+                    .withColumn("partida_id", F.monotonically_increasing_id())
+                    .select('partida_id', 'aeroporto_partida', 'tipo_aero_partida', 
+                            'nome_aeroporto_partida', 'continente_partida', 'pais_partida', 'cidade_partida'))
+        
+        # DIMENSAO DESTINO - com chave própria
+        dim_destino = (df_enriched_reordered
+                    .select('aeroporto_chegada', 'tipo_aero_chegada', 'nome_aeroporto_chegada',
+                            'continente_chegada', 'pais_chegada', 'cidade_chegada')
+                    .distinct()
+                    .withColumn("destino_id", F.monotonically_increasing_id())
+                    .select('destino_id', 'aeroporto_chegada', 'tipo_aero_chegada', 
+                            'nome_aeroporto_chegada', 'continente_chegada', 'pais_chegada', 'cidade_chegada'))
+        
+        # DIMENSAO SERVICO - com chave própria
+        dim_servico = (df_enriched_reordered
+                    .select('cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc')
+                    .distinct()
+                    .withColumn("servico_id", F.monotonically_increasing_id())
+                    .select('servico_id', 'cod_tipo_servico', 'aplicacao_servico', 
+                            'tipo_servico_operacao', 'tipo_servico_desc'))
+        
+        # DIMENSAO AERONAVE - com chave própria
+        dim_aeronave = (df_enriched_reordered
+                        .select('matricula_aeronave', 'aeronave_modelo_icao', 'aeronave_operador')
+                        .distinct()
+                        .withColumn("aeronave_id", F.monotonically_increasing_id())
+                        .select('aeronave_id', 'matricula_aeronave', 'aeronave_modelo_icao', 'aeronave_operador'))
+        
+        fato_voo = (df_enriched_reordered
+                    .alias('f')
+                    .join(dim_tempo.alias('t'), 
+                        ['data_manobra', 'ano', 'mes', 'dia_semana'],  
+                        'left')
+                    .join(dim_partida.alias('p'), 
+                        ['aeroporto_partida'],  
+                        'left')
+                    .join(dim_destino.alias('d'), 
+                        ['aeroporto_chegada'],  
+                        'left')
+                    .join(broadcast(dim_servico).alias('s'),
+                        ['cod_tipo_servico', 'aplicacao_servico', 'tipo_servico_operacao', 'tipo_servico_desc'],
+                        'left')
+                    .join(dim_aeronave.alias('a'),
+                        ['matricula_aeronave', 'aeronave_modelo_icao', 'aeronave_operador'],
+                        'left')
+                    .select(
+                        F.monotonically_increasing_id().alias('voo_id'), 
+                        'f.numero_voo',
+                        'f.natureza_operacao',
+                        'f.qtd_pax_local',
+                        'f.qtd_pax_conexao_domestico',
+                        'f.qtd_pax_conexao_internacional',
+                        'f.total_pax',
+                        'f.pandemia_decreto',
+                        'f.atraso',
+                        'f.tempo_atraso',
+                        't.tempo_id',
+                        'p.partida_id',
+                        'd.destino_id',
+                        's.servico_id',
+                        'a.aeronave_id'
+                    ))
 
         output_path = f's3a://{bucket}/gold'
-        dim_tempo.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/dim_tempo')
+        dim_tempo.repartition('ano').write.mode('overwrite').partitionBy('ano').parquet(f'{output_path}/anac_movimentacoes/dim_tempo')
         dim_partida.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/dim_partida')
         dim_destino.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/dim_destino')
         dim_servico.write.mode('overwrite').parquet(f'{output_path}/anac_movimentacoes/dim_servico')
